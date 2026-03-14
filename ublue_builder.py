@@ -910,18 +910,23 @@ class App:
     def review_new_image(self, *, step: int, total_steps: int) -> str:
         self.show_summary(step=step, total_steps=total_steps)
         print()
+        self.gum.hint("Press Enter to choose what to do next.")
+        self.gum.hint("Press Esc here to go back to the previous step.")
+        print()
+        self.gum.enter_to_continue("Press Enter to continue...")
+        self.gum.header("Choose Next Step")
         self.gum.hint("Choose Continue to create the GitHub repo and start the build.")
         self.gum.hint("Choose one of the edit options if you want to change something first.")
         print()
         options = [
             "Continue and start GitHub build",
             "Edit software",
-            "Edit repository name and description",
+            "Edit repository settings",
             "Edit base image",
             "Edit build method",
             "Cancel and go back to the main menu",
         ]
-        choice = self.gum.choose(options, height=10)
+        choice = self.gum.choose(options, height=8)
         selected = choice[0] if choice else options[-1]
         if selected.startswith("Continue"):
             return "build"
