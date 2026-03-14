@@ -562,9 +562,9 @@ class App:
             self.gum.warn("GitHub CLI not found. Install it with: brew install gh")
 
         if command_exists("cosign"):
-            self.gum.success("cosign found (image signing available)")
+            self.gum.success("cosign found (signed builds available)")
         else:
-            self.gum.warn("cosign not found (signed builds will be skipped)")
+            raise SystemExit("cosign is required for signed images. Install it with: brew install cosign")
 
         if command_exists("dnf5"):
             self.gum.success("dnf5 found (manual package checks available)")
@@ -1272,12 +1272,12 @@ class App:
         build_script_exists = (repo_dir / "build_files/build.sh").exists() or (repo_dir / "build.sh").exists()
         return (repo_dir / "Containerfile").exists() and build_script_exists
 
-    def maybe_enable_signing(self, owner: str, repo: str) -> bool:
+    def ensure_signing_ready(self, owner: str, repo: str) -> bool:
         self.generated_cosign_pub = None
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
             return True
         if not command_exists("cosign"):
-            return False
+            raise CommandError("cosign is required for signed images. Install it with: brew install cosign")
         with tempfile.TemporaryDirectory(prefix="ublue-signing.") as tmp:
             tmpdir = Path(tmp)
             env = os.environ.copy()
@@ -1286,8 +1286,7 @@ class App:
             key_path = tmpdir / "cosign.key"
             pub_path = tmpdir / "cosign.pub"
             if proc.returncode != 0 or not key_path.exists() or not pub_path.exists():
-                self.gum.warn("Unable to generate cosign keypair. Builds will stay unsigned.")
-                return False
+                raise CommandError("Unable to generate a cosign keypair. Fix cosign first, then try again.")
             with key_path.open("rb") as key_handle:
                 secret_proc = subprocess.run(
                     ["gh", "secret", "set", "SIGNING_SECRET", "-R", f"{owner}/{repo}"],
@@ -1298,8 +1297,7 @@ class App:
                     check=False,
                 )
             if secret_proc.returncode != 0:
-                self.gum.warn("Unable to upload SIGNING_SECRET. Builds will stay unsigned.")
-                return False
+                raise CommandError("Unable to upload SIGNING_SECRET to GitHub. Check your gh login and repo access, then try again.")
             self.generated_cosign_pub = pub_path.read_text()
         self.gum.success("Configured SIGNING_SECRET for image signing.")
         return True
@@ -1476,7 +1474,7 @@ class App:
             f"Creating {owner}/{repo}...",
             ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
         )
-        self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
+        self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
 
         with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
             tmpdir = Path(tmp)
@@ -1579,7 +1577,7 @@ class App:
             self.load_repo_config(tmpdir)
             self.config.repo_name = repo
             self.config.github_user = owner
-            self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
+            self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
             if self.used_legacy_import:
                 print()
                 self.gum.warn("Imported this repo from legacy generated files instead of a canonical state file.")
@@ -1610,7 +1608,7 @@ class App:
             self.import_legacy_config(tmpdir)
             self.config.repo_name = repo
             self.config.github_user = owner
-            self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
+            self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
             print()
             self.gum.warn("This repo was made another way, and this tool is about to take over managing it.")
             self.gum.hint("If you continue, the tool will save its own settings file and rewrite the files it manages.")
@@ -1961,7 +1959,7 @@ class App:
             self.config.removed_packages = self.choose_to_remove(self.config.removed_packages, "Remove Base Package Removals")
 
     def push_update(self, owner: str, repo: str, repo_dir: Path) -> None:
-        self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
+        self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
         self.write_project_files(repo_dir, include_workflow=True)
         diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
         if not diff:

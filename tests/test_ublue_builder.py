@@ -152,6 +152,49 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "supported base images"):
             app.validate_config()
 
+    def test_ensure_signing_ready_requires_cosign(self) -> None:
+        app = self.make_app()
+        with patch.object(app, "repo_secret_exists", return_value=False):
+            with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
+                with self.assertRaisesRegex(CommandError, "brew install cosign"):
+                    app.ensure_signing_ready("example", "test-image")
+
+    def test_preflight_requires_cosign(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def ensure_available(self) -> None:
+                pass
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def success(self, *_args, **_kwargs) -> None:
+                pass
+
+            def warn(self, *_args, **_kwargs) -> None:
+                pass
+
+            def enter_to_continue(self, *_args, **_kwargs) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        def fake_exists(name: str) -> bool:
+            if name == "cosign":
+                return False
+            return True
+
+        with patch("ublue_builder.command_exists", side_effect=fake_exists):
+            with patch("ublue_builder.run") as run_mock:
+                run_mock.return_value = subprocess.CompletedProcess(["gh", "auth", "status"], 0, "", "")
+                with patch.object(app, "gh_json", return_value={"login": "example"}):
+                    with self.assertRaisesRegex(SystemExit, "brew install cosign"):
+                        app.preflight()
+
     def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
         app = self.make_app()
 
