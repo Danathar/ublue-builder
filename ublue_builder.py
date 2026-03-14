@@ -830,7 +830,27 @@ class App:
     def repo_default_branch(self, owner: str, repo: str) -> str:
         data = self.gh_json(["repo", "view", f"{owner}/{repo}", "--json", "defaultBranchRef"])
         branch = data.get("defaultBranchRef", {}).get("name")
-        return branch or "main"
+        if branch:
+            return branch
+        proc = run(["gh", "api", f"/repos/{owner}/{repo}"], check=False)
+        if proc.returncode == 0 and proc.stdout.strip():
+            try:
+                data = json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                return "main"
+            branch = data.get("default_branch")
+            if isinstance(branch, str) and branch:
+                return branch
+        return "main"
+
+    def seed_project_template(self, target: Path) -> None:
+        if self.config.method == "containerfile":
+            self.clone_container_template(target)
+            return
+        if self.config.method == "bluebuild":
+            self.clone_bluebuild_template(target)
+            return
+        raise CommandError(f"Unsupported build method: {self.config.method}")
 
     def do_build(self) -> None:
         if not self.require_github():
@@ -841,17 +861,21 @@ class App:
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
         if not exists:
-            create_args = ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"]
-            if self.config.method == "containerfile":
-                create_args.extend(["--template", CONTAINERFILE_TEMPLATE_REPO])
-            elif self.config.method == "bluebuild":
-                create_args.extend(["--template", BLUEBUILD_TEMPLATE_REPO])
-            self.gum.spinner(f"Creating {owner}/{repo}...", create_args)
+            self.gum.spinner(
+                f"Creating {owner}/{repo}...",
+                ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
+            )
         self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
 
         with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
             tmpdir = Path(tmp)
-            self.clone_repo(owner, repo, tmpdir)
+            if exists:
+                self.clone_repo(owner, repo, tmpdir)
+            else:
+                self.seed_project_template(tmpdir)
+                branch = self.repo_default_branch(owner, repo)
+                run(["git", "init", "-b", branch], cwd=tmpdir)
+                run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
             self.write_project_files(tmpdir, include_workflow=True)
             run(["git", "add", "-A"], cwd=tmpdir)
             run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir, check=False)
@@ -1423,6 +1447,10 @@ class App:
         has_job_cosign = any(line.strip() == "COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}" and line.startswith("      ") for line in lines)
         for line in lines:
             stripped = line.strip()
+            if stripped.startswith("- cron:"):
+                indent = line[: len(line) - len(line.lstrip())]
+                output.append(f"{indent}- cron: '{DEFAULT_GITHUB_BUILD_CRON}'")
+                continue
             if stripped.startswith("IMAGE_DESC:"):
                 output.append(f"  IMAGE_DESC: {yaml_scalar(self.config.image_desc)}")
                 continue
