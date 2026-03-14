@@ -1443,8 +1443,8 @@ class App:
         output: list[str] = []
         current_step = ""
         inserted_job_env = False
-        has_job_env = any(line == "    env:" for line in lines)
-        has_job_cosign = any(line.strip() == "COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}" and line.startswith("      ") for line in lines)
+        has_job_env = any(re.fullmatch(r" {4}env:", line) for line in lines)
+        has_job_cosign = any(re.fullmatch(r" {6}COSIGN_PRIVATE_KEY: \$\{\{ secrets\.SIGNING_SECRET \}\}", line) for line in lines)
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("- cron:"):
