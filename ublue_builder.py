@@ -20,6 +20,8 @@ SERVICE_NAME = "ublue-local-build"
 TIMER_DIR = Path.home() / ".config/systemd/user"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
+CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
+CONTAINERFILE_TEMPLATE_GIT_URL = f"https://github.com/{CONTAINERFILE_TEMPLATE_REPO}.git"
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,10 @@ def sanitize_slug(value: str, default: str = DEFAULT_REPO_NAME) -> str:
 
 def yaml_scalar(value: str) -> str:
     return json.dumps(value)
+
+
+def ensure_trailing_newline(text: str) -> str:
+    return text.rstrip("\n") + "\n"
 
 
 def command_exists(name: str) -> bool:
@@ -781,6 +787,19 @@ class App:
     def clone_repo(self, owner: str, repo: str, target: Path) -> None:
         self.gum.spinner(f"Cloning {owner}/{repo}...", ["gh", "repo", "clone", f"{owner}/{repo}", str(target)])
 
+    def clone_container_template(self, target: Path) -> None:
+        target = target.expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if any(target.iterdir()):
+                raise CommandError(f"{target} already exists and is not empty.")
+            target.rmdir()
+        self.gum.spinner(
+            f"Cloning {CONTAINERFILE_TEMPLATE_REPO}...",
+            ["git", "clone", "--depth", "1", CONTAINERFILE_TEMPLATE_GIT_URL, str(target)],
+        )
+        shutil.rmtree(target / ".git", ignore_errors=True)
+
     def current_branch(self, repo_dir: Path) -> str:
         proc = run(["git", "branch", "--show-current"], cwd=repo_dir)
         branch = proc.stdout.strip()
@@ -803,10 +822,10 @@ class App:
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
         if not exists:
-            self.gum.spinner(
-                f"Creating {owner}/{repo}...",
-                ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
-            )
+            create_args = ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"]
+            if self.config.method == "containerfile":
+                create_args.extend(["--template", CONTAINERFILE_TEMPLATE_REPO])
+            self.gum.spinner(f"Creating {owner}/{repo}...", create_args)
         self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
 
         with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
@@ -1196,7 +1215,10 @@ class App:
             self.select_packages()
             self.show_summary()
             local_dir = Path.home() / self.config.repo_name
-            local_dir.mkdir(parents=True, exist_ok=True)
+            if self.config.method == "containerfile":
+                self.clone_container_template(local_dir)
+            else:
+                local_dir.mkdir(parents=True, exist_ok=True)
             self.write_project_files(local_dir, include_workflow=False)
         else:
             return
@@ -1337,26 +1359,111 @@ class App:
         payload["state_version"] = 1
         return payload
 
+    def render_containerfile(self, existing_text: str | None = None) -> str:
+        if existing_text:
+            lines = existing_text.splitlines()
+            for index, line in enumerate(lines):
+                if line.startswith("FROM ") and "scratch" not in line:
+                    lines[index] = f"FROM {self.config.base_image_uri}"
+                    return ensure_trailing_newline("\n".join(lines))
+        return self.generate_containerfile()
+
+    def patch_container_justfile(self, existing_text: str) -> str:
+        updated = re.sub(
+            r'^export image_name := env\("IMAGE_NAME",\s*"[^"]*"\)(.*)$',
+            f'export image_name := env("IMAGE_NAME", "{self.config.repo_name}")\\1',
+            existing_text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        return ensure_trailing_newline(updated)
+
+    def patch_container_readme(self, existing_text: str) -> str:
+        lines = existing_text.splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith("# "):
+                lines[index] = f"# {self.config.repo_name}"
+                break
+        owner = self.config.github_user or "<username>"
+        image_ref = f"ghcr.io/{owner}/{self.config.repo_name}"
+        updated = "\n".join(lines).replace("ghcr.io/<username>/<image_name>", image_ref)
+        return ensure_trailing_newline(updated)
+
+    def patch_container_workflow(self, existing_text: str) -> str:
+        branch_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+        sign_if = f"{branch_if} && env.COSIGN_PRIVATE_KEY != ''"
+        lines = existing_text.splitlines()
+        output: list[str] = []
+        current_step = ""
+        inserted_job_env = False
+        has_job_env = any(line == "    env:" for line in lines)
+        has_job_cosign = any(line.strip() == "COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}" and line.startswith("      ") for line in lines)
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("IMAGE_DESC:"):
+                output.append(f"  IMAGE_DESC: {yaml_scalar(self.config.image_desc)}")
+                continue
+            if stripped.startswith("- name: "):
+                current_step = stripped[len("- name: ") :]
+            if stripped == "steps:" and not inserted_job_env and not has_job_env and not has_job_cosign:
+                output.append("    env:")
+                output.append("      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}")
+                inserted_job_env = True
+            if current_step in {"Install Cosign", "Sign container image"} and stripped.startswith("if: ") and branch_if in stripped:
+                indent = line[: len(line) - len(line.lstrip())]
+                output.append(f"{indent}if: {sign_if}")
+                continue
+            output.append(line)
+        return ensure_trailing_newline("\n".join(output))
+
+    def write_container_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+        readme_path = base_dir / "README.md"
+        gitignore_path = base_dir / ".gitignore"
+        justfile_path = base_dir / "Justfile"
+        containerfile_path = base_dir / "Containerfile"
+        workflow_path = base_dir / ".github/workflows/build.yml"
+
+        if readme_path.exists():
+            readme_path.write_text(self.patch_container_readme(readme_path.read_text()))
+        else:
+            readme_path.write_text(self.generate_readme())
+
+        existing_gitignore = gitignore_path.read_text().splitlines() if gitignore_path.exists() else []
+        for entry in ["cosign.key", "_build*/", "output/"]:
+            if entry not in existing_gitignore:
+                existing_gitignore.append(entry)
+        gitignore_path.write_text(ensure_trailing_newline("\n".join(existing_gitignore)))
+
+        (base_dir / "build_files").mkdir(parents=True, exist_ok=True)
+        existing_containerfile = containerfile_path.read_text() if containerfile_path.exists() else None
+        containerfile_path.write_text(self.render_containerfile(existing_containerfile))
+        build_sh = base_dir / "build_files/build.sh"
+        build_sh.write_text(self.generate_build_sh())
+        build_sh.chmod(0o755)
+
+        if justfile_path.exists():
+            justfile_path.write_text(self.patch_container_justfile(justfile_path.read_text()))
+        else:
+            justfile_path.write_text(self.generate_justfile())
+
+        if include_workflow:
+            workflow_path.parent.mkdir(parents=True, exist_ok=True)
+            if workflow_path.exists():
+                workflow_path.write_text(self.patch_container_workflow(workflow_path.read_text()))
+            else:
+                workflow_path.write_text(self.generate_container_workflow())
+
     def write_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
         if self.config.method == "bluebuild" and self.config.removed_packages:
             raise CommandError("Removed base packages are only supported in Containerfile mode.")
         base_dir.mkdir(parents=True, exist_ok=True)
         (base_dir / STATE_FILE).write_text(json.dumps(self.state_payload(), indent=2) + "\n")
-        (base_dir / "README.md").write_text(self.generate_readme())
-        (base_dir / ".gitignore").write_text("cosign.key\n_build*/\noutput/\n")
 
         if self.config.method == "containerfile":
-            (base_dir / "build_files").mkdir(parents=True, exist_ok=True)
-            (base_dir / "Containerfile").write_text(self.generate_containerfile())
-            build_sh = base_dir / "build_files/build.sh"
-            build_sh.write_text(self.generate_build_sh())
-            build_sh.chmod(0o755)
-            (base_dir / "Justfile").write_text(self.generate_justfile())
-            if include_workflow:
-                workflow_dir = base_dir / ".github/workflows"
-                workflow_dir.mkdir(parents=True, exist_ok=True)
-                (workflow_dir / "build.yml").write_text(self.generate_container_workflow())
+            self.write_container_project_files(base_dir, include_workflow=include_workflow)
         else:
+            (base_dir / "README.md").write_text(self.generate_readme())
+            (base_dir / ".gitignore").write_text("cosign.key\n_build*/\noutput/\n")
             (base_dir / "recipes").mkdir(parents=True, exist_ok=True)
             (base_dir / "files/system").mkdir(parents=True, exist_ok=True)
             (base_dir / "modules").mkdir(parents=True, exist_ok=True)
