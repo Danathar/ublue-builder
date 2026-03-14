@@ -243,6 +243,8 @@ def run(
 
 class Gum:
     def require_interactive_success(self, proc: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
+        if proc.returncode == 130:
+            raise KeyboardInterrupt()
         if proc.returncode != 0:
             raise ScreenBack()
         return proc

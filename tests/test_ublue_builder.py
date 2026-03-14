@@ -230,9 +230,16 @@ class BuilderTests(unittest.TestCase):
 
     def test_gum_input_raises_screen_back_when_interactive_command_aborts(self) -> None:
         gum = Gum()
-        completed = subprocess.CompletedProcess(["gum", "input"], 130, "", "")
+        completed = subprocess.CompletedProcess(["gum", "input"], 1, "", "")
         with patch.object(Gum, "interactive_stdout", return_value=completed):
             with self.assertRaises(ScreenBack):
+                gum.input(prompt="Repository name: ")
+
+    def test_gum_input_raises_keyboard_interrupt_on_ctrl_c(self) -> None:
+        gum = Gum()
+        completed = subprocess.CompletedProcess(["gum", "input"], 130, "", "")
+        with patch.object(Gum, "interactive_stdout", return_value=completed):
+            with self.assertRaises(KeyboardInterrupt):
                 gum.input(prompt="Repository name: ")
 
     def test_update_task_choices_show_current_status(self) -> None:
