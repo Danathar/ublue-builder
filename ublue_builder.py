@@ -21,11 +21,12 @@ TIMER_DIR = Path.home() / ".config/systemd/user"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
-CONTAINERFILE_TEMPLATE_GIT_URL = f"https://github.com/{CONTAINERFILE_TEMPLATE_REPO}.git"
 CONTAINERFILE_TEMPLATE_REV = "ec2ccf3b7683d8435a2611eb99d0b702102557b5"
 BLUEBUILD_TEMPLATE_REPO = "blue-build/template"
-BLUEBUILD_TEMPLATE_GIT_URL = f"https://github.com/{BLUEBUILD_TEMPLATE_REPO}.git"
 BLUEBUILD_TEMPLATE_REV = "d3f382af4c40c80bbd207507f4ead99b6144a281"
+TEMPLATE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "template_snapshots"
+CONTAINERFILE_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "containerfile"
+BLUEBUILD_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "bluebuild"
 ALLOWED_METHODS = {"containerfile", "bluebuild"}
 PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
 COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
@@ -902,39 +903,25 @@ class App:
     def clone_repo(self, owner: str, repo: str, target: Path) -> None:
         self.gum.spinner(f"Cloning {owner}/{repo}...", ["gh", "repo", "clone", f"{owner}/{repo}", str(target)])
 
-    def clone_template_repo(self, target: Path, *, repo: str, git_url: str, revision: str) -> None:
+    def copy_template_snapshot(self, target: Path, *, repo: str, source_dir: Path) -> None:
         target = target.expanduser()
         target.parent.mkdir(parents=True, exist_ok=True)
+        if not source_dir.is_dir():
+            raise CommandError(f"Bundled template snapshot not found for {repo}.")
         if target.exists():
             if any(target.iterdir()):
                 raise CommandError(f"{target} already exists and is not empty.")
             target.rmdir()
-        target.mkdir(parents=True, exist_ok=False)
-        self.gum.spinner(f"Downloading {repo}...", ["git", "init", "-q", "-b", "template"], cwd=target)
-        run(["git", "remote", "add", "origin", git_url], cwd=target)
         self.gum.spinner(
-            f"Fetching {repo}...",
-            ["git", "fetch", "--depth", "1", "origin", revision],
-            cwd=target,
+            f"Copying bundled {repo} template...",
+            ["python3", "-c", "import shutil, sys; shutil.copytree(sys.argv[1], sys.argv[2], ignore=shutil.ignore_patterns('.template-source'))", str(source_dir), str(target)],
         )
-        run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=target)
-        shutil.rmtree(target / ".git", ignore_errors=True)
 
     def clone_container_template(self, target: Path) -> None:
-        self.clone_template_repo(
-            target,
-            repo=CONTAINERFILE_TEMPLATE_REPO,
-            git_url=CONTAINERFILE_TEMPLATE_GIT_URL,
-            revision=CONTAINERFILE_TEMPLATE_REV,
-        )
+        self.copy_template_snapshot(target, repo=CONTAINERFILE_TEMPLATE_REPO, source_dir=CONTAINERFILE_TEMPLATE_DIR)
 
     def clone_bluebuild_template(self, target: Path) -> None:
-        self.clone_template_repo(
-            target,
-            repo=BLUEBUILD_TEMPLATE_REPO,
-            git_url=BLUEBUILD_TEMPLATE_GIT_URL,
-            revision=BLUEBUILD_TEMPLATE_REV,
-        )
+        self.copy_template_snapshot(target, repo=BLUEBUILD_TEMPLATE_REPO, source_dir=BLUEBUILD_TEMPLATE_DIR)
 
     def current_branch(self, repo_dir: Path) -> str:
         proc = run(["git", "branch", "--show-current"], cwd=repo_dir)

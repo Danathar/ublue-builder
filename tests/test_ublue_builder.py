@@ -6,7 +6,9 @@ from pathlib import Path
 from ublue_builder import (
     ACTION_PINS,
     App,
+    BLUEBUILD_TEMPLATE_DIR,
     CommandError,
+    CONTAINERFILE_TEMPLATE_DIR,
     Config,
     config_from_state_payload,
 )
@@ -130,6 +132,28 @@ class BuilderTests(unittest.TestCase):
         app.config.packages = ["tmux", "bad;rm"]
         with self.assertRaisesRegex(CommandError, "Invalid package value"):
             app.validate_config()
+
+    def test_bundled_template_snapshots_exist(self) -> None:
+        self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
+        self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / ".template-source").is_file())
+        self.assertTrue((BLUEBUILD_TEMPLATE_DIR / "recipes/recipe.yml").is_file())
+        self.assertTrue((BLUEBUILD_TEMPLATE_DIR / ".template-source").is_file())
+
+    def test_clone_container_template_uses_bundled_snapshot(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def spinner(self, title, command, *, cwd=None):
+                from ublue_builder import run
+
+                run(command, cwd=cwd)
+
+        app.gum = GumStub()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "seeded"
+            app.clone_container_template(target)
+            self.assertTrue((target / "Containerfile").is_file())
+            self.assertFalse((target / ".template-source").exists())
 
 
 if __name__ == "__main__":
