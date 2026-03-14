@@ -545,6 +545,9 @@ class App:
 
     def main_menu(self) -> None:
         while True:
+            self.gum.header("Main Menu")
+            self.gum.hint("Choose what you want to do, then press Enter. Use the arrow keys to move.")
+            print()
             action = self.gum.choose(
                 [
                     "Create New Image",
@@ -582,6 +585,8 @@ class App:
 
     def choose_method(self) -> None:
         self.gum.header("Build Method")
+        self.gum.hint("Choose how you want this image to be defined, then press Enter.")
+        print()
         options = [
             "Containerfile  - Shell script based (recommended)",
             "BlueBuild      - YAML recipe based",
@@ -596,6 +601,8 @@ class App:
 
     def choose_base_image(self) -> None:
         self.gum.header("Base Image")
+        self.gum.hint("Pick the starting image you want to customize, then press Enter.")
+        print()
         if self.config.base_image_uri:
             print(f"  Detected base image: {self.gum.style(self.config.base_image_name or self.config.base_image_uri, bold=True)}")
             print(f"  Image: {self.gum.style(self.config.base_image_uri, foreground=117)}")
@@ -640,6 +647,8 @@ class App:
     def select_packages(self) -> None:
         self.gum.header("Software Selection")
         while True:
+            self.gum.hint("Choose what you want to add or review. Pick Done when you are finished.")
+            print()
             selection = self.gum.choose(
                 [
                     "Browse package catalog",
