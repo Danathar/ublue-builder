@@ -434,8 +434,10 @@ class App:
         output = self.gum.spinner_capture(title, ["gh", *args])
         return json.loads(output or "null")
 
-    def show_step_header(self, title: str, *, step: int, total_steps: int) -> None:
+    def show_step_header(self, title: str, *, step: int, total_steps: int, next_hint: str | None = None) -> None:
         self.gum.header(title)
+        if next_hint:
+            self.gum.hint(next_hint)
         self.gum.hint(f"Step {step} of {total_steps}.")
         print()
 
@@ -908,7 +910,12 @@ class App:
 
     def show_summary(self, *, step: int | None = None, total_steps: int | None = None) -> None:
         if step is not None and total_steps is not None:
-            self.show_step_header("Review Build Configuration", step=step, total_steps=total_steps)
+            self.show_step_header(
+                "Review Build Configuration",
+                step=step,
+                total_steps=total_steps,
+                next_hint="Press Enter to continue to the next screen. Esc goes back to the previous step.",
+            )
         else:
             self.gum.header("Review Build Configuration")
         self.gum.hint("This is a read-only summary of the current settings.")
@@ -932,10 +939,6 @@ class App:
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
         self.show_summary(step=step, total_steps=total_steps)
-        print()
-        self.gum.hint("Press Enter to choose what to do next.")
-        self.gum.hint("Press Esc here to go back to the previous step.")
-        print()
         self.gum.enter_to_continue("Press Enter to continue...")
         self.gum.header("Choose Next Step")
         self.gum.hint("Choose Continue to create the GitHub repo and start the build.")
