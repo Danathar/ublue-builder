@@ -445,6 +445,7 @@ class App:
             self.gum.warn("rpm-ostree not found (OS scan unavailable)")
 
         print()
+        self.gum.enter_to_continue("Press Enter to continue...")
 
     def require_github(self) -> bool:
         if self.github_available and self.github_user:
@@ -577,6 +578,9 @@ class App:
         self.configure_repo()
         self.select_packages()
         self.show_summary()
+        print()
+        self.gum.hint("Press Enter at the next prompt to continue and start the GitHub build.")
+        self.gum.hint("Choose No there if you want to go back and make changes first.")
         print()
         if self.gum.confirm("Push to GitHub and trigger a build?", default=True):
             self.do_build()
