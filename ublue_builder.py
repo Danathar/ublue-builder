@@ -211,6 +211,10 @@ class CommandError(RuntimeError):
     pass
 
 
+class UserQuit(RuntimeError):
+    pass
+
+
 def run(
     args: Sequence[str],
     *,
@@ -238,6 +242,11 @@ def run(
 
 
 class Gum:
+    def require_interactive_success(self, proc: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
+        if proc.returncode != 0:
+            raise UserQuit()
+        return proc
+
     def clear(self) -> None:
         if sys.stdout.isatty() and os.environ.get("TERM"):
             run(["clear"], capture=False, check=False)
@@ -285,6 +294,7 @@ class Gum:
             self.clear()
         print()
         print(self.style(f"━━━  {title}  ━━━", foreground=117, bold=True))
+        print(self.style("Press q to quit before making changes.", faint=True, width=64))
         print()
 
     def hint(self, message: str) -> None:
@@ -310,11 +320,13 @@ class Gum:
             args.extend(["--placeholder", placeholder])
         if width is not None:
             args.extend(["--width", str(width)])
-        return self.interactive_stdout(args).stdout.rstrip("\n")
+        return self.require_interactive_success(self.interactive_stdout(args)).stdout.rstrip("\n")
 
     def write(self, *, placeholder: str, height: int, width: int) -> str:
-        return self.interactive_stdout(
-            ["gum", "write", "--show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
+        return self.require_interactive_success(
+            self.interactive_stdout(
+                ["gum", "write", "--show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
+            )
         ).stdout.rstrip("\n")
 
     def choose(
@@ -333,14 +345,16 @@ class Gum:
             args.extend(["--selected", ",".join(selected)])
         if header:
             args.extend(["--header", header])
-        proc = self.interactive_stdout(args, stdin="\n".join(options) + "\n")
+        proc = self.require_interactive_success(self.interactive_stdout(args, stdin="\n".join(options) + "\n"))
         output = proc.stdout.strip("\n")
         return [line for line in output.splitlines() if line]
 
     def filter(self, options: Sequence[str], *, height: int = 20, placeholder: str = "Search...") -> str:
-        proc = self.interactive_stdout(
-            ["gum", "filter", "--show-help", "--height", str(height), "--placeholder", placeholder],
-            stdin="\n".join(options) + "\n",
+        proc = self.require_interactive_success(
+            self.interactive_stdout(
+                ["gum", "filter", "--show-help", "--height", str(height), "--placeholder", placeholder],
+                stdin="\n".join(options) + "\n",
+            )
         )
         return proc.stdout.strip()
 
@@ -369,7 +383,7 @@ class Gum:
             Path(output_path).unlink(missing_ok=True)
 
     def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-        run(["gum", "input", "--placeholder", placeholder], check=False, capture=False)
+        self.require_interactive_success(self.interactive_stdout(["gum", "input", "--show-help", "--placeholder", placeholder]))
 
 
 class App:
@@ -2083,6 +2097,9 @@ def main() -> None:
     app = App()
     try:
         app.run_main()
+    except UserQuit:
+        print()
+        raise SystemExit(0)
     except CommandError as exc:
         app.gum.error(str(exc))
         raise SystemExit(1) from exc

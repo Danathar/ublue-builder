@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -12,7 +13,9 @@ from ublue_builder import (
     CommandError,
     CONTAINERFILE_TEMPLATE_DIR,
     Config,
+    Gum,
     config_from_state_payload,
+    UserQuit,
 )
 
 
@@ -224,6 +227,13 @@ class BuilderTests(unittest.TestCase):
             app.clone_container_template(target)
             self.assertTrue((target / "Containerfile").is_file())
             self.assertFalse((target / ".template-source").exists())
+
+    def test_gum_input_raises_user_quit_when_interactive_command_aborts(self) -> None:
+        gum = Gum()
+        completed = subprocess.CompletedProcess(["gum", "input"], 130, "", "")
+        with patch.object(Gum, "interactive_stdout", return_value=completed):
+            with self.assertRaises(UserQuit):
+                gum.input(prompt="Repository name: ")
 
 
 if __name__ == "__main__":

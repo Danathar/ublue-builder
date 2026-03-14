@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from ublue_builder import App, CommandError
+from ublue_builder import App, CommandError, UserQuit
 
 
 class LegacyImportApp(App):
@@ -33,6 +33,9 @@ def main() -> None:
     app = LegacyImportApp()
     try:
         app.run_main()
+    except UserQuit:
+        print()
+        raise SystemExit(0)
     except CommandError as exc:
         app.gum.error(str(exc))
         raise SystemExit(1) from exc
