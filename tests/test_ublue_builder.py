@@ -235,6 +235,25 @@ class BuilderTests(unittest.TestCase):
             with self.assertRaises(UserQuit):
                 gum.input(prompt="Repository name: ")
 
+    def test_update_task_choices_show_current_status(self) -> None:
+        app = self.make_app()
+        app.config.packages = ["tmux", "ripgrep"]
+        app.config.copr_repos = ["foo/bar"]
+        app.config.services = ["sshd.service"]
+        choices = dict(app.update_task_choices())
+        self.assertEqual(choices["Packages"], "2 selected")
+        self.assertEqual(choices["COPR repositories"], "1 added")
+        self.assertEqual(choices["Services"], "1 enabled")
+        self.assertEqual(choices["Flatpaks"], "BlueBuild only")
+
+    def test_update_task_choices_bluebuild_shows_flatpak_count(self) -> None:
+        app = self.make_app()
+        app.config.method = "bluebuild"
+        app.config.flatpaks = ["org.mozilla.firefox"]
+        choices = dict(app.update_task_choices())
+        self.assertEqual(choices["Flatpaks"], "1 added")
+        self.assertEqual(choices["Removed base packages"], "Containerfile only")
+
 
 if __name__ == "__main__":
     unittest.main()

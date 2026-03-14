@@ -423,6 +423,34 @@ class App:
         output = self.gum.spinner_capture(title, ["gh", *args])
         return json.loads(output or "null")
 
+    def show_step_header(self, title: str, *, step: int, total_steps: int) -> None:
+        self.gum.header(title)
+        self.gum.hint(f"Step {step} of {total_steps}.")
+        print()
+
+    def format_task_choice(self, title: str, status: str) -> str:
+        return f"{title:<24} {status}"
+
+    def truncate_label(self, value: str, limit: int = 36) -> str:
+        clean = " ".join(value.split())
+        if len(clean) <= limit:
+            return clean
+        return clean[: limit - 3] + "..."
+
+    def update_task_choices(self) -> list[tuple[str, str]]:
+        return [
+            ("Packages", f"{len(self.config.packages)} selected"),
+            ("Base image", self.config.base_image_name or "(not set)"),
+            ("Description", self.truncate_label(self.config.image_desc or "(empty)")),
+            ("COPR repositories", f"{len(self.config.copr_repos)} added"),
+            ("Services", f"{len(self.config.services)} enabled"),
+            ("Flatpaks", f"{len(self.config.flatpaks)} added" if self.config.method == "bluebuild" else "BlueBuild only"),
+            (
+                "Removed base packages",
+                f"{len(self.config.removed_packages)} selected" if self.config.method == "containerfile" else "Containerfile only",
+            ),
+        ]
+
     def preflight(self) -> None:
         self.gum.ensure_available()
         self.gum.header("Preflight Checks", clear_screen=False)
@@ -575,32 +603,58 @@ class App:
                 raise SystemExit(0)
             if selected == "Create New Image":
                 self.create_new_image()
-                return
+                continue
             if selected == "Scan OS & Migrate Layered Packages":
                 if self.scan_os():
                     self.create_new_image(scanned=True)
-                return
+                continue
             if selected == "Update Existing Image":
                 self.update_existing_image()
-                return
+                continue
 
     def create_new_image(self, *, scanned: bool = False) -> None:
-        if scanned and self.config.scanned_removed:
-            self.gum.warn("Removed base packages were detected and will only be applied in Containerfile mode.")
-        self.choose_method()
-        self.choose_base_image()
-        self.configure_repo()
-        self.select_packages()
-        self.show_summary()
-        print()
-        self.gum.hint("Press Enter at the next prompt to continue and start the GitHub build.")
-        self.gum.hint("Choose No there if you want to go back and make changes first.")
-        print()
-        if self.gum.confirm("Push to GitHub and trigger a build?", default=True):
-            self.do_build()
+        total_steps = 5
+        step = 1
+        while True:
+            if step == 1:
+                self.choose_method(step=step, total_steps=total_steps)
+                step = 2
+                continue
+            if step == 2:
+                self.choose_base_image(step=step, total_steps=total_steps)
+                step = 3
+                continue
+            if step == 3:
+                self.configure_repo(step=step, total_steps=total_steps)
+                step = 4
+                continue
+            if step == 4:
+                self.select_packages(step=step, total_steps=total_steps)
+                step = 5
+                continue
+            action = self.review_new_image(step=step, total_steps=total_steps)
+            if action == "build":
+                if self.do_build():
+                    return
+                continue
+            if action == "method":
+                step = 1
+            elif action == "base":
+                step = 2
+            elif action == "repo":
+                step = 3
+            elif action == "software":
+                step = 4
+            else:
+                return
 
-    def choose_method(self) -> None:
-        self.gum.header("Build Method")
+    def choose_method(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        if step is not None and total_steps is not None:
+            self.show_step_header("Build Method", step=step, total_steps=total_steps)
+        else:
+            self.gum.header("Build Method")
+        if self.config.scanned_removed:
+            self.gum.warn("Removed base packages from your scan only work with Containerfile.")
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         print()
         options = [
@@ -615,8 +669,11 @@ class App:
             self.config.method = "containerfile"
         self.gum.success(f"Method: {self.config.method}")
 
-    def choose_base_image(self) -> None:
-        self.gum.header("Base Image")
+    def choose_base_image(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        if step is not None and total_steps is not None:
+            self.show_step_header("Base Image", step=step, total_steps=total_steps)
+        else:
+            self.gum.header("Base Image")
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("DX means the image starts with extra developer tools already included.")
         print()
@@ -650,8 +707,11 @@ class App:
                 break
         self.gum.success(f"Base image: {self.config.base_image_name} ({self.config.base_image_uri})")
 
-    def configure_repo(self) -> None:
-        self.gum.header("Repository Configuration")
+    def configure_repo(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        if step is not None and total_steps is not None:
+            self.show_step_header("Repository Configuration", step=step, total_steps=total_steps)
+        else:
+            self.gum.header("Repository Configuration")
         self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
         print()
         default_name = self.config.repo_name or DEFAULT_REPO_NAME
@@ -672,11 +732,17 @@ class App:
         else:
             self.gum.success(f"Repo name: {self.config.repo_name}")
 
-    def select_packages(self) -> None:
-        self.gum.header("Software Selection")
+    def select_packages(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        if step is not None and total_steps is not None:
+            self.show_step_header("Software Selection", step=step, total_steps=total_steps)
+        else:
+            self.gum.header("Software Selection")
         while True:
             self.gum.hint("Use the arrow keys to move and Enter to choose.")
             self.gum.hint("Choose Done when you are finished and want to keep going.")
+            self.gum.hint(
+                f"Current picks: {len(self.config.packages)} packages, {len(self.config.services)} services, {len(self.config.flatpaks)} Flatpaks."
+            )
             print()
             selection = self.gum.choose(
                 [
@@ -794,9 +860,12 @@ class App:
         print()
         self.gum.enter_to_continue("Press Enter to go back to the software menu...")
 
-    def show_summary(self) -> None:
-        self.gum.header("Review Build Configuration")
-        self.gum.hint("This screen shows your current settings. The next prompt will ask what to do next.")
+    def show_summary(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        if step is not None and total_steps is not None:
+            self.show_step_header("Review Build Configuration", step=step, total_steps=total_steps)
+        else:
+            self.gum.header("Review Build Configuration")
+        self.gum.hint("This is a read-only summary of the current settings.")
         print()
         rows = [
             ("Repository", f"{self.github_user}/{self.config.repo_name}" if self.github_user else self.config.repo_name),
@@ -814,6 +883,34 @@ class App:
         if self.config.removed_packages and self.config.method != "containerfile":
             print()
             self.gum.warn("Removed base packages are only applied in Containerfile mode.")
+
+    def review_new_image(self, *, step: int, total_steps: int) -> str:
+        self.show_summary(step=step, total_steps=total_steps)
+        print()
+        self.gum.hint("Choose Continue to create the GitHub repo and start the build.")
+        self.gum.hint("Choose one of the edit options if you want to change something first.")
+        print()
+        options = [
+            "Continue and start GitHub build",
+            "Edit software",
+            "Edit repository name and description",
+            "Edit base image",
+            "Edit build method",
+            "Cancel and go back to the main menu",
+        ]
+        choice = self.gum.choose(options, height=10)
+        selected = choice[0] if choice else options[-1]
+        if selected.startswith("Continue"):
+            return "build"
+        if selected.startswith("Edit software"):
+            return "software"
+        if selected.startswith("Edit repository"):
+            return "repo"
+        if selected.startswith("Edit base image"):
+            return "base"
+        if selected.startswith("Edit build method"):
+            return "method"
+        return "cancel"
 
     def scan_os(self) -> bool:
         self.gum.header("Scanning Running OS")
@@ -1046,9 +1143,9 @@ class App:
         self.gum.success(f"Added {len(packages)} package(s) from {source_label}")
         return True
 
-    def do_build(self) -> None:
+    def do_build(self) -> bool:
         if not self.require_github():
-            return
+            return False
         owner = self.github_user
         repo = self.config.repo_name
         self.config.github_user = owner
@@ -1061,7 +1158,8 @@ class App:
                 self.gum.hint("That repo was already created by this tool. Use 'Update Existing Image' to change it, or pick a new repo name.")
             else:
                 self.gum.hint("That repo was not created by this tool. Use 'Import Legacy Repo' if you want this tool to take it over, or pick a new repo name.")
-            return
+            self.gum.enter_to_continue("Press Enter to go back to the review screen...")
+            return False
         self.gum.spinner(
             f"Creating {owner}/{repo}...",
             ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
@@ -1103,6 +1201,9 @@ class App:
                 border="double",
             )
         )
+        print()
+        self.gum.enter_to_continue("Press Enter to return to the main menu...")
+        return True
 
     def select_repo(self, *, require_state_file: bool = False) -> tuple[str, str]:
         if not self.require_github():
@@ -1162,12 +1263,10 @@ class App:
                 print()
                 self.gum.warn("Imported this repo from legacy generated files instead of a canonical state file.")
                 self.gum.hint("Review packages, COPR repos, services, Flatpaks, and removed base packages carefully before pushing changes.")
-            self.show_summary()
-            self.gum.enter_to_continue("Press Enter to continue to the update menu...")
-            self.update_menu()
-            self.show_summary()
-            print()
-            self.push_update(owner, repo, tmpdir)
+            if self.update_menu():
+                self.show_summary()
+                print()
+                self.push_update(owner, repo, tmpdir)
 
     def import_legacy_repo(self) -> None:
         if not self.require_github():
@@ -1191,9 +1290,8 @@ class App:
             print()
             self.gum.warn("This repo was made another way, and this tool is about to take over managing it.")
             self.gum.hint("If you continue, the tool will save its own settings file and rewrite the files it manages.")
-            self.show_summary()
-            self.gum.enter_to_continue("Press Enter to review and edit the imported settings...")
-            self.update_menu()
+            if not self.update_menu():
+                return
             self.show_summary()
             print()
             if not self.gum.confirm(f"Let this tool take over {owner}/{repo}?", default=False):
@@ -1348,32 +1446,62 @@ class App:
             cfg.base_image_name = cfg.base_image_uri
         return cfg
 
-    def update_menu(self) -> None:
+    def update_menu(self) -> bool:
         while True:
             self.gum.header("Update Image")
-            self.gum.hint("Use the arrow keys to move and Enter to choose.")
-            self.gum.hint("Choose Done when you are finished and want to keep going.")
+            self.gum.hint("Choose a section to review or change.")
+            self.gum.hint("Save and push changes when you are finished, or cancel to go back.")
+            print()
+            mapping: dict[str, str] = {}
+            options: list[str] = []
+            for title, status in self.update_task_choices():
+                label = self.format_task_choice(title, status)
+                mapping[label] = title
+                options.append(label)
+            review_label = "Review current configuration"
+            save_label = "Save and push changes"
+            cancel_label = "Cancel and go back"
+            options.extend([review_label, save_label, cancel_label])
+            choice = self.gum.choose(options, height=14)
+            selected = choice[0] if choice else cancel_label
+            if selected == save_label:
+                self.config.normalize()
+                return True
+            if selected == cancel_label:
+                return False
+            if selected == review_label:
+                self.show_summary()
+                self.gum.enter_to_continue("Press Enter to go back to the update menu...")
+                continue
+            task = mapping[selected]
+            if task == "Packages":
+                self.manage_packages()
+            elif task == "Base image":
+                self.config.base_image_uri = ""
+                self.choose_base_image()
+            elif task == "Description":
+                self.edit_description()
+            elif task == "COPR repositories":
+                self.manage_copr_repos()
+            elif task == "Services":
+                self.manage_services()
+            elif task == "Flatpaks":
+                self.manage_flatpaks()
+            elif task == "Removed base packages":
+                self.manage_removed_packages()
+
+    def manage_packages(self) -> None:
+        while True:
+            self.gum.header("Edit Packages")
+            self.gum.hint("Choose how you want to change packages.")
+            self.gum.hint("Choose Back to return to the update menu.")
             print()
             choice = self.gum.choose(
-                [
-                    "Add packages from catalog",
-                    "Add packages manually",
-                    "Remove packages",
-                    "Change base image",
-                    "Change description",
-                    "Add a COPR repository",
-                    "Remove a COPR repository",
-                    "Manage systemd services",
-                    "Manage Flatpaks",
-                    "Manage removed base packages",
-                    "View current configuration",
-                    "Done",
-                ],
-                height=14,
+                ["Add packages from catalog", "Add packages manually", "Remove packages", "Back"],
+                height=8,
             )
-            selected = choice[0] if choice else "Done"
-            if selected == "Done":
-                self.config.normalize()
+            selected = choice[0] if choice else "Back"
+            if selected == "Back":
                 return
             if selected == "Add packages from catalog":
                 self.select_from_catalog()
@@ -1381,26 +1509,33 @@ class App:
                 self.manual_packages()
             elif selected == "Remove packages":
                 self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
-            elif selected == "Change base image":
-                self.config.base_image_uri = ""
-                self.choose_base_image()
-            elif selected == "Change description":
-                value = self.gum.input(prompt="New description: ", value=self.config.image_desc, width=80)
-                if value:
-                    self.config.image_desc = value
-            elif selected == "Add a COPR repository":
+
+    def manage_copr_repos(self) -> None:
+        while True:
+            self.gum.header("Edit COPR Repositories")
+            self.gum.hint("Choose how you want to change COPR repositories.")
+            self.gum.hint("Choose Back to return to the update menu.")
+            print()
+            choice = self.gum.choose(
+                ["Add a COPR repository", "Remove a COPR repository", "Back"],
+                height=6,
+            )
+            selected = choice[0] if choice else "Back"
+            if selected == "Back":
+                return
+            if selected == "Add a COPR repository":
                 self.add_copr()
             elif selected == "Remove a COPR repository":
                 self.config.copr_repos = self.choose_to_remove(self.config.copr_repos, "Remove COPR Repos")
-            elif selected == "Manage systemd services":
-                self.manage_services()
-            elif selected == "Manage Flatpaks":
-                self.manage_flatpaks()
-            elif selected == "Manage removed base packages":
-                self.manage_removed_packages()
-            elif selected == "View current configuration":
-                self.show_summary()
-                self.gum.enter_to_continue("Press Enter to go back to the update menu...")
+
+    def edit_description(self) -> None:
+        self.gum.header("Edit Description")
+        self.gum.hint("Enter a short description for this image.")
+        self.gum.hint("Leave it empty if you want to keep the current description.")
+        print()
+        value = self.gum.input(prompt="New description: ", value=self.config.image_desc, width=80)
+        if value:
+            self.config.image_desc = value
 
     def choose_to_remove(self, values: list[str], header: str) -> list[str]:
         if not values:
@@ -1473,6 +1608,8 @@ class App:
         run(["git", "add", "-A"], cwd=repo_dir)
         run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir, check=False)
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
+        self.gum.success(f"Pushed changes to {owner}/{repo}.")
+        self.gum.enter_to_continue("Press Enter to return to the main menu...")
 
     def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
         invalid = [value for value in values if not pattern.fullmatch(value)]
