@@ -243,6 +243,16 @@ def run(
 
 
 class Gum:
+    def interactive_stdout(self, args: Sequence[str], *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            list(args),
+            input=stdin,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            check=False,
+        )
+
     def ensure_available(self) -> None:
         if not command_exists("gum"):
             raise SystemExit("gum is required. Install it with: brew install gum")
@@ -299,12 +309,11 @@ class Gum:
             args.extend(["--placeholder", placeholder])
         if width is not None:
             args.extend(["--width", str(width)])
-        return run(args, check=False).stdout.rstrip("\n")
+        return self.interactive_stdout(args).stdout.rstrip("\n")
 
     def write(self, *, placeholder: str, height: int, width: int) -> str:
-        return run(
-            ["gum", "write", "--placeholder", placeholder, "--height", str(height), "--width", str(width)],
-            check=False,
+        return self.interactive_stdout(
+            ["gum", "write", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
         ).stdout.rstrip("\n")
 
     def choose(
@@ -323,14 +332,13 @@ class Gum:
             args.extend(["--selected", ",".join(selected)])
         if header:
             args.extend(["--header", header])
-        proc = run(args, check=False, stdin="\n".join(options) + "\n")
+        proc = self.interactive_stdout(args, stdin="\n".join(options) + "\n")
         output = proc.stdout.strip("\n")
         return [line for line in output.splitlines() if line]
 
     def filter(self, options: Sequence[str], *, height: int = 20, placeholder: str = "Search...") -> str:
-        proc = run(
+        proc = self.interactive_stdout(
             ["gum", "filter", "--height", str(height), "--placeholder", placeholder],
-            check=False,
             stdin="\n".join(options) + "\n",
         )
         return proc.stdout.strip()
