@@ -996,7 +996,7 @@ class App:
             script_lines.append(f"dnf5 -y copr enable {shell_quote(repo)} >/dev/null")
         if package_list:
             joined = " ".join(shell_quote(pkg) for pkg in package_list)
-            script_lines.append(f"dnf5 repoquery --available --latest-limit 1 --qf '%{{name}}' {joined}")
+            script_lines.append(f"dnf5 repoquery --available --latest-limit 1 --qf '%{{name}}\\n' {joined}")
         else:
             script_lines.append("printf '__repo-check-ok__\\n'")
         command = [

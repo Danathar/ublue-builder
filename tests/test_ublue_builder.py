@@ -2,6 +2,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ublue_builder import (
     ACTION_PINS,
@@ -190,6 +191,32 @@ class BuilderTests(unittest.TestCase):
         app.config.packages = ["tmux", "ripgrep"]
         with self.assertRaisesRegex(CommandError, "ripgrep"):
             app.validate_package_availability()
+
+    def test_query_available_packages_in_image_uses_line_delimited_queryformat(self) -> None:
+        class CaptureApp(App):
+            def __init__(self) -> None:
+                super().__init__()
+                self.last_command = None
+
+            def capture_command_output(self, title, command, *, cwd=None):
+                self.last_command = command
+                return "tmux\nripgrep\n"
+
+        app = CaptureApp()
+        app.config = Config(
+            method="containerfile",
+            base_image_uri="ghcr.io/ublue-os/bazzite:stable",
+            base_image_name="Bazzite",
+            base_image_tag="stable",
+            repo_name="test-image",
+            image_desc="Test image",
+            github_user="example",
+        )
+        with patch("ublue_builder.command_exists", return_value=True):
+            available = app.query_available_packages_in_image(["tmux", "ripgrep"])
+        self.assertEqual(available, {"tmux", "ripgrep"})
+        self.assertIsNotNone(app.last_command)
+        self.assertIn("%{name}\\n", app.last_command[-1])
 
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
