@@ -472,6 +472,29 @@ class App:
             )
         )
 
+    def startup_requirements(self) -> None:
+        print(
+            self.gum.style(
+                "Before You Start",
+                "",
+                "You need a GitHub account to use this tool.",
+                "You should also log in with the GitHub CLI first:",
+                "",
+                "gh auth login",
+                "",
+                "This tool stores your image config on GitHub and uses GitHub Actions to build it.",
+                align="left",
+                width=self.gum.content_width(max_width=100, reserve=8),
+                margin="0 2",
+                padding="1 2",
+                foreground=117,
+                border_foreground=117,
+                border="rounded",
+            )
+        )
+        print()
+        self.gum.enter_to_continue("Press Enter to start the preflight checks...")
+
     def clear(self) -> None:
         self.gum.clear()
 
@@ -2581,6 +2604,7 @@ class App:
     def run_main(self) -> None:
         self.clear()
         self.banner()
+        self.startup_requirements()
         self.preflight()
         self.main_menu()
 
