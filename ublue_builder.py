@@ -62,7 +62,6 @@ class Config:
     base_image_tag: str = ""
     repo_name: str = ""
     image_desc: str = "My custom Universal Blue image"
-    private_repo: bool = False
     packages: list[str] = field(default_factory=list)
     copr_repos: list[str] = field(default_factory=list)
     services: list[str] = field(default_factory=list)
@@ -249,6 +248,7 @@ class App:
         self.config = Config()
         self.github_available = False
         self.github_user = ""
+        self.used_legacy_import = False
 
     def banner(self) -> None:
         print(
@@ -505,7 +505,8 @@ class App:
             width=80,
         ) or self.config.image_desc
         print()
-        self.config.private_repo = self.gum.confirm("Make repository private?", default=False)
+        self.gum.hint("Repositories created by this tool are public.")
+        print()
         if self.github_user:
             self.gum.success(f"Repo: {self.github_user}/{self.config.repo_name}")
         else:
@@ -619,7 +620,6 @@ class App:
             ("Description", self.config.image_desc),
             ("Base Image", self.config.base_image_name or self.config.base_image_uri),
             ("Image URI", self.config.base_image_uri),
-            ("Visibility", "Private" if self.config.private_repo else "Public"),
             ("Packages", str(len(self.config.packages))),
             ("COPR Repos", str(len(self.config.copr_repos))),
             ("Services", str(len(self.config.services))),
@@ -784,10 +784,9 @@ class App:
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
         if not exists:
-            visibility = "--private" if self.config.private_repo else "--public"
             self.gum.spinner(
                 f"Creating {owner}/{repo}...",
-                ["gh", "repo", "create", repo, "--description", self.config.image_desc, visibility],
+                ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
             )
         self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
 
@@ -806,14 +805,17 @@ class App:
         branch = self.repo_default_branch(owner, repo)
         run(["gh", "workflow", "run", "build.yml", "-R", f"{owner}/{repo}", "--ref", branch], check=False)
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
+        summary_lines = [
+            "Build Complete",
+            "",
+            f"Repository: https://github.com/{owner}/{repo}",
+            f"Image:      {image_uri}",
+            "",
+            f"Switch to your image: sudo bootc switch {image_uri}",
+        ]
         print(
             self.gum.style(
-                "Build Complete",
-                "",
-                f"Repository: https://github.com/{owner}/{repo}",
-                f"Image:      {image_uri}",
-                "",
-                f"Switch to your image: sudo bootc switch {image_uri}",
+                *summary_lines,
                 align="center",
                 width=68,
                 margin="1",
@@ -824,29 +826,28 @@ class App:
             )
         )
 
-    def select_repo(self) -> tuple[str, str, bool]:
+    def select_repo(self) -> tuple[str, str]:
         if not self.require_github():
             raise SystemExit(1)
-        repos = self.gh_json(["repo", "list", self.github_user, "--json", "name,description,isPrivate", "--limit", "100"])
+        repos = self.gh_json(["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"])
         if not repos:
             raise SystemExit("No repositories found on your GitHub account.")
         labels: list[str] = []
-        mapping: dict[str, tuple[str, str, bool]] = {}
+        mapping: dict[str, tuple[str, str]] = {}
         for item in repos:
             description = item.get("description") or "(no description)"
             if len(description) > 40:
                 description = description[:37] + "..."
-            vis = "private" if item.get("isPrivate") else "public"
-            label = f"{item['name']:<30} {vis:<7} {description}"
+            label = f"{item['name']:<30} {description}"
             labels.append(label)
-            mapping[label] = (self.github_user, item["name"], bool(item.get("isPrivate")))
+            mapping[label] = (self.github_user, item["name"])
         manual_label = "Type a repository name manually"
         labels.append(manual_label)
         choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
         if choice == manual_label:
             repo = sanitize_slug(self.gum.input(prompt="Repository name: ", placeholder=DEFAULT_REPO_NAME, width=50))
-            data = self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name,isPrivate"])
-            return self.github_user, repo, bool(data.get("isPrivate"))
+            self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name"])
+            return self.github_user, repo
         if choice in mapping:
             return mapping[choice]
         raise SystemExit("No repository selected.")
@@ -854,8 +855,7 @@ class App:
     def update_existing_image(self) -> None:
         if not self.require_github():
             return
-        owner, repo, is_private = self.select_repo()
-        self.config.private_repo = is_private
+        owner, repo = self.select_repo()
         self.config.repo_name = repo
         self.config.github_user = owner
         with tempfile.TemporaryDirectory(prefix="ublue-update.") as tmp:
@@ -864,8 +864,11 @@ class App:
             self.load_repo_config(tmpdir)
             self.config.repo_name = repo
             self.config.github_user = owner
-            self.config.private_repo = is_private
             self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
+            if self.used_legacy_import:
+                print()
+                self.gum.warn("Imported this repo from legacy generated files instead of a canonical state file.")
+                self.gum.hint("Review packages, COPR repos, services, Flatpaks, and removed base packages carefully before pushing changes.")
             self.show_summary()
             self.gum.enter_to_continue("Press Enter to continue to the update menu...")
             self.update_menu()
@@ -874,6 +877,7 @@ class App:
             self.push_update(owner, repo, tmpdir)
 
     def load_repo_config(self, repo_dir: Path) -> None:
+        self.used_legacy_import = False
         state_path = repo_dir / STATE_FILE
         if state_path.exists():
             try:
@@ -888,6 +892,7 @@ class App:
         self.import_legacy_config(repo_dir)
 
     def import_legacy_config(self, repo_dir: Path) -> None:
+        self.used_legacy_import = True
         if (repo_dir / "recipes/recipe.yml").exists():
             self.config = self.import_legacy_bluebuild(repo_dir)
         else:
@@ -1129,6 +1134,7 @@ class App:
         if not command_exists("podman"):
             self.gum.error("Podman is required for local builds. Install it with: brew install podman")
             return
+        bootc_available = command_exists("bootc")
 
         choice = self.gum.choose(
             [
@@ -1148,7 +1154,7 @@ class App:
                 self.gum.error(f"Directory not found: {local_dir}")
                 return
         elif selected == "Clone a GitHub repository to build locally":
-            owner, repo, _ = self.select_repo()
+            owner, repo = self.select_repo()
             local_dir = Path.home() / repo
             if local_dir.exists():
                 if not (local_dir / ".git").is_dir():
@@ -1203,6 +1209,10 @@ class App:
             self.gum.error("Build failed.")
             return
         self.gum.success(f"Built localhost/{image_name}:latest")
+        if not bootc_available:
+            print()
+            self.gum.warn("bootc is not installed on this host. Install/stage actions are unavailable.")
+            return
 
         action = self.gum.choose(
             [
@@ -1227,6 +1237,7 @@ class App:
         if not command_exists("podman"):
             self.gum.error("Podman is required for nightly builds.")
             return
+        bootc_available = command_exists("bootc")
         project_dir = Path(
             self.gum.input(prompt="Project directory: ", placeholder=str(Path.home() / "my-ublue-image"), width=60)
         ).expanduser()
@@ -1243,7 +1254,11 @@ class App:
         hour = self.gum.input(prompt="Build hour (0-23): ", value="3", width=30) or "3"
         if not hour.isdigit() or int(hour) > 23:
             hour = "3"
-        auto_stage = self.gum.confirm("Automatically stage the image for next boot after building?", default=True)
+        auto_stage = False
+        if bootc_available:
+            auto_stage = self.gum.confirm("Automatically stage the image for next boot after building?", default=True)
+        else:
+            self.gum.warn("bootc is not installed on this host. Nightly builds can rebuild locally, but they cannot stage the image.")
         auto_pull = (project_dir / ".git").is_dir() and self.gum.confirm("Pull latest git changes before each build?", default=True)
         image_name = sanitize_slug(project_dir.name, project_dir.name)
 
