@@ -821,8 +821,6 @@ class App:
             ["gh", "api", "-X", "PUT", f"/repos/{owner}/{repo}/actions/permissions", "-f", "enabled=true", "-f", "allowed_actions=all"],
             check=False,
         )
-        branch = self.repo_default_branch(owner, repo)
-        run(["gh", "workflow", "run", "build.yml", "-R", f"{owner}/{repo}", "--ref", branch], check=False)
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
         summary_lines = [
             "Build Complete",
@@ -1148,9 +1146,6 @@ class App:
         run(["git", "add", "-A"], cwd=repo_dir)
         run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir, check=False)
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
-        branch = self.repo_default_branch(owner, repo)
-        run(["gh", "workflow", "run", "build.yml", "-R", f"{owner}/{repo}", "--ref", branch], check=False)
-
     def local_build_image(self) -> None:
         self.gum.header("Build Image Locally")
         if not command_exists("podman"):
@@ -1427,7 +1422,7 @@ class App:
         return "\n".join(lines).rstrip() + "\n"
 
     def generate_container_workflow(self) -> str:
-        sign_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && secrets.SIGNING_SECRET != ''"
+        sign_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.COSIGN_PRIVATE_KEY != ''"
         lines = [
             "---",
             "name: Build container image",
@@ -1456,6 +1451,8 @@ class App:
             "      contents: read",
             "      packages: write",
             "      id-token: write",
+            "    env:",
+            "      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}",
             "    steps:",
             "      - name: Prepare environment",
             "        run: |",
@@ -1529,8 +1526,6 @@ class App:
                     "          for tag in ${{ steps.metadata.outputs.tags }}; do",
                     "            cosign sign -y --key env://COSIGN_PRIVATE_KEY $IMAGE_FULL:$tag",
                     "          done",
-                    "        env:",
-                    "          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}",
                 ]
             )
         return "\n".join(lines).rstrip() + "\n"
