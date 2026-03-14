@@ -53,15 +53,10 @@ class BaseImage:
 
 BASE_IMAGES: tuple[BaseImage, ...] = (
     BaseImage("bazzite", "Bazzite", "Gaming-focused, SteamOS-like experience", "ghcr.io/ublue-os/bazzite:stable", "stable"),
-    BaseImage("bazzite-deck", "Bazzite Deck", "Bazzite for Steam Deck / HTPC", "ghcr.io/ublue-os/bazzite-deck:stable", "stable"),
     BaseImage("aurora", "Aurora (KDE)", "KDE Plasma desktop, polished and productive", "ghcr.io/ublue-os/aurora:stable", "stable"),
     BaseImage("aurora-dx", "Aurora DX", "Aurora with developer tools", "ghcr.io/ublue-os/aurora-dx:stable", "stable"),
     BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop, clean and opinionated", "ghcr.io/ublue-os/bluefin:stable", "stable"),
     BaseImage("bluefin-dx", "Bluefin DX", "Bluefin with developer tools", "ghcr.io/ublue-os/bluefin-dx:stable", "stable"),
-    BaseImage("base-main", "Universal Blue Base", "Minimal base with codecs + RPMFusion", "ghcr.io/ublue-os/base-main:latest", "latest"),
-    BaseImage("silverblue", "Silverblue (GNOME base)", "Universal Blue Silverblue", "ghcr.io/ublue-os/silverblue-main:latest", "latest"),
-    BaseImage("kinoite", "Kinoite (KDE base)", "Universal Blue Kinoite", "ghcr.io/ublue-os/kinoite-main:latest", "latest"),
-    BaseImage("fedora-bootc", "Fedora Bootc 42", "Vanilla Fedora bootc, no uBlue additions", "quay.io/fedora/fedora-bootc:42", "42"),
 )
 
 CATALOGS: dict[str, list[str]] = {
@@ -600,11 +595,20 @@ class App:
         self.gum.hint("Pick the starting image you want to customize, then press Enter.")
         print()
         if self.config.base_image_uri:
-            print(f"  Detected base image: {self.gum.style(self.config.base_image_name or self.config.base_image_uri, bold=True)}")
-            print(f"  Image: {self.gum.style(self.config.base_image_uri, foreground=117)}")
-            print()
-            if self.gum.confirm("Use this base image?", default=True):
-                return
+            matched = self.match_base_image(self.config.base_image_uri)
+            if matched:
+                print(f"  Detected base image: {self.gum.style(self.config.base_image_name or self.config.base_image_uri, bold=True)}")
+                print(f"  Image: {self.gum.style(self.config.base_image_uri, foreground=117)}")
+                print()
+                if self.gum.confirm("Use this base image?", default=True):
+                    return
+            else:
+                self.gum.warn("This tool now supports only Aurora, Aurora DX, Bluefin, Bluefin DX, and Bazzite.")
+                self.gum.hint("Choose one of those supported starting images below.")
+                print()
+                self.config.base_image_uri = ""
+                self.config.base_image_name = ""
+                self.config.base_image_tag = ""
 
         options = [
             f"{image.name:<25} {image.description}  [{image.image_uri}]"
@@ -852,7 +856,8 @@ class App:
 
     def match_base_image(self, value: str) -> BaseImage | None:
         for image in BASE_IMAGES:
-            if value == image.image_uri or value.startswith(image.image_uri.split(":")[0]):
+            image_repo = image.image_uri.rsplit(":", 1)[0]
+            if value == image.image_uri or value == image_repo or value.startswith(f"{image_repo}:") or value.startswith(f"{image_repo}@"):
                 return image
         return None
 
@@ -1410,6 +1415,8 @@ class App:
             raise CommandError("Choose a supported build method before writing project files.")
         if not self.config.base_image_uri or re.search(r"\s", self.config.base_image_uri):
             raise CommandError("Base image URI is missing or invalid.")
+        if not self.match_base_image(self.config.base_image_uri):
+            raise CommandError("Choose one of the supported base images: Aurora, Aurora DX, Bluefin, Bluefin DX, or Bazzite.")
         self.validate_token_list(self.config.packages, PACKAGE_TOKEN_RE, "package")
         self.validate_token_list(self.config.removed_packages, PACKAGE_TOKEN_RE, "removed package")
         self.validate_token_list(self.config.copr_repos, COPR_REPO_RE, "COPR repository")

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from ublue_builder import (
     ACTION_PINS,
     App,
+    BASE_IMAGES,
     BLUEBUILD_TEMPLATE_DIR,
     CommandError,
     CONTAINERFILE_TEMPLATE_DIR,
@@ -132,6 +133,19 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.config.packages = ["tmux", "bad;rm"]
         with self.assertRaisesRegex(CommandError, "Invalid package value"):
+            app.validate_config()
+
+    def test_base_image_picker_is_limited_to_beginner_images(self) -> None:
+        self.assertEqual(
+            [image.key for image in BASE_IMAGES],
+            ["bazzite", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
+        )
+
+    def test_validate_config_rejects_unsupported_base_image(self) -> None:
+        app = self.make_app()
+        app.config.base_image_uri = "ghcr.io/ublue-os/bazzite-deck:stable"
+        app.config.base_image_name = "Bazzite Deck"
+        with self.assertRaisesRegex(CommandError, "supported base images"):
             app.validate_config()
 
     def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
