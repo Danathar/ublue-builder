@@ -793,33 +793,52 @@ class App:
                 continue
 
     def select_from_catalog(self) -> None:
-        self.gum.header("Package Catalog")
-        self.gum.hint("Use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose Back to return to the previous menu.")
-        print()
-        options = list(CATALOGS) + ["Back"]
-        try:
-            choice = self.gum.choose(options, height=10)
-        except ScreenBack:
-            return
-        selected = choice[0] if choice else "Back"
-        if selected == "Back":
-            return
-        current = set(self.config.packages)
-        self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages.")
-        self.gum.hint("Press Enter when you are finished, or leave everything unselected to make no changes.")
-        print()
-        try:
-            picked = self.gum.choose(
-                CATALOGS[selected],
-                height=20,
-                no_limit=True,
-                selected=[pkg for pkg in CATALOGS[selected] if pkg in current],
-                header=selected,
-            )
-        except ScreenBack:
-            return
-        self.add_packages_to_config(picked, source_label=selected)
+        while True:
+            self.gum.header("Package Catalog")
+            self.gum.hint("Choose a package group to browse.")
+            self.gum.hint("Press Esc to go back to the previous menu.")
+            print()
+            options = list(CATALOGS) + ["Back"]
+            try:
+                choice = self.gum.choose(options, height=10)
+            except ScreenBack:
+                return
+            selected = choice[0] if choice else "Back"
+            if selected == "Back":
+                return
+            if self.browse_catalog_group(selected):
+                return
+
+    def browse_catalog_group(self, group: str) -> bool:
+        while True:
+            self.gum.header(f"{group} Packages")
+            self.gum.hint("Choose a package to add or remove it.")
+            self.gum.hint("Choose Done when you are finished, or Back to return to the package groups.")
+            print()
+            labels: dict[str, str] = {}
+            options: list[str] = []
+            current = set(self.config.packages)
+            for package in CATALOGS[group]:
+                marker = "[x]" if package in current else "[ ]"
+                label = f"{marker} {package}"
+                labels[label] = package
+                options.append(label)
+            options.extend(["Done", "Back"])
+            try:
+                choice = self.gum.choose(options, height=20)
+            except ScreenBack:
+                return False
+            selected = choice[0] if choice else "Back"
+            if selected == "Done":
+                return True
+            if selected == "Back":
+                return False
+            package = labels[selected]
+            if package in current:
+                self.config.packages = [item for item in self.config.packages if item != package]
+                self.config.normalize()
+            else:
+                self.add_packages_to_config([package], source_label=group)
 
     def manual_packages(self) -> None:
         print()

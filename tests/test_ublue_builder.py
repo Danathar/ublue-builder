@@ -195,6 +195,40 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.packages, [])
         self.assertTrue(any(level == "error" and "Invalid package value" in message for level, message in app.gum.messages))
 
+    def test_browse_catalog_group_toggles_selected_package(self) -> None:
+        app = self.make_app()
+        app.config.packages = []
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def header(self, _title: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def choose(self, options, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return [next(option for option in options if option.endswith("tmux"))]
+                return ["Done"]
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def error(self, _message: str) -> None:
+                pass
+
+        app.gum = GumStub()
+        finished = app.browse_catalog_group("CLI Tools")
+        self.assertTrue(finished)
+        self.assertIn("tmux", app.config.packages)
+
     def test_do_build_validates_before_creating_repo(self) -> None:
         app = self.make_app()
         app.github_available = True
