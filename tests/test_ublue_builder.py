@@ -9,7 +9,6 @@ from ublue_builder import (
     ACTION_PINS,
     App,
     BASE_IMAGES,
-    BLUEBUILD_TEMPLATE_DIR,
     COMMON_SERVICES,
     CommandError,
     CONTAINERFILE_TEMPLATE_DIR,
@@ -42,7 +41,7 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "packages must contain only strings"):
             config_from_state_payload({"packages": ["tmux", 42]})
 
-    def test_import_legacy_bluebuild_ignores_user_scope_entry(self) -> None:
+    def test_import_legacy_config_rejects_bluebuild_repo(self) -> None:
         recipe = textwrap.dedent(
             """\
             name: "legacy-image"
@@ -64,8 +63,8 @@ class BuilderTests(unittest.TestCase):
             repo_dir = Path(tmp)
             (repo_dir / "recipes").mkdir()
             (repo_dir / "recipes/recipe.yml").write_text(recipe)
-            cfg = self.make_app().import_legacy_bluebuild(repo_dir)
-        self.assertEqual(cfg.flatpaks, ["org.mozilla.firefox"])
+            with self.assertRaisesRegex(CommandError, "BlueBuild repos are no longer supported"):
+                self.make_app().import_legacy_config(repo_dir)
 
     def test_patch_container_workflow_pins_actions_and_ignores_state_file(self) -> None:
         app = self.make_app()
@@ -97,41 +96,6 @@ class BuilderTests(unittest.TestCase):
         self.assertIn(ACTION_PINS["ublue-os/remove-unwanted-software"][0], patched)
         self.assertIn(ACTION_PINS["sigstore/cosign-installer"][0], patched)
         self.assertIn("env.COSIGN_PRIVATE_KEY != ''", patched)
-
-    def test_patch_bluebuild_workflow_pins_action_and_normalizes_recipe(self) -> None:
-        app = self.make_app()
-        app.config.method = "bluebuild"
-        app.config.signing_enabled = False
-        workflow = textwrap.dedent(
-            """\
-            name: bluebuild
-            on:
-              schedule:
-                - cron:
-                    "00 06 * * *"
-              push:
-                paths-ignore:
-                  - "**.md"
-            jobs:
-              bluebuild:
-                steps:
-                  - name: Build Custom Image
-                    uses: blue-build/github-action@v1.11
-                    with:
-                      recipe: ${{ matrix.recipe }}
-                      cosign_private_key: ${{ secrets.SIGNING_SECRET }}
-                strategy:
-                  matrix:
-                    recipe:
-                      - recipes/recipe.yml
-            """
-        )
-        patched = app.patch_bluebuild_workflow(workflow)
-        self.assertIn(ACTION_PINS["blue-build/github-action"][0], patched)
-        self.assertIn('- ".ublue-builder.json"', patched)
-        self.assertIn("- recipe.yml", patched)
-        self.assertNotIn("recipes/recipe.yml", patched)
-        self.assertNotIn("cosign_private_key:", patched)
 
     def test_validate_config_rejects_unsafe_package_token(self) -> None:
         app = self.make_app()
@@ -452,8 +416,6 @@ class BuilderTests(unittest.TestCase):
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / ".template-source").is_file())
-        self.assertTrue((BLUEBUILD_TEMPLATE_DIR / "recipes/recipe.yml").is_file())
-        self.assertTrue((BLUEBUILD_TEMPLATE_DIR / ".template-source").is_file())
 
     def test_clone_container_template_uses_bundled_snapshot(self) -> None:
         app = self.make_app()
@@ -490,19 +452,12 @@ class BuilderTests(unittest.TestCase):
         app.config.packages = ["tmux", "ripgrep"]
         app.config.copr_repos = ["foo/bar"]
         app.config.services = ["sshd.service"]
+        app.config.removed_packages = ["vim-enhanced"]
         choices = dict(app.update_task_choices())
         self.assertEqual(choices["Packages"], "2 selected")
         self.assertEqual(choices["COPR repositories"], "1 added")
         self.assertEqual(choices["Services"], "1 enabled")
-        self.assertEqual(choices["Flatpaks"], "BlueBuild only")
-
-    def test_update_task_choices_bluebuild_shows_flatpak_count(self) -> None:
-        app = self.make_app()
-        app.config.method = "bluebuild"
-        app.config.flatpaks = ["org.mozilla.firefox"]
-        choices = dict(app.update_task_choices())
-        self.assertEqual(choices["Flatpaks"], "1 added")
-        self.assertEqual(choices["Removed base packages"], "Containerfile only")
+        self.assertEqual(choices["Removed base packages"], "1 selected")
 
     def test_pager_text_with_hint_puts_exit_instruction_in_pager(self) -> None:
         app = self.make_app()
