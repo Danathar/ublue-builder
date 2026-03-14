@@ -22,6 +22,8 @@ DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 CONTAINERFILE_TEMPLATE_GIT_URL = f"https://github.com/{CONTAINERFILE_TEMPLATE_REPO}.git"
+BLUEBUILD_TEMPLATE_REPO = "blue-build/template"
+BLUEBUILD_TEMPLATE_GIT_URL = f"https://github.com/{BLUEBUILD_TEMPLATE_REPO}.git"
 
 
 @dataclass(frozen=True)
@@ -270,6 +272,7 @@ class App:
         self.github_available = False
         self.github_user = ""
         self.used_legacy_import = False
+        self.generated_cosign_pub: str | None = None
 
     def banner(self) -> None:
         print(
@@ -756,6 +759,7 @@ class App:
         return any(line.split()[0] == secret_name for line in proc.stdout.splitlines() if line.strip())
 
     def maybe_enable_signing(self, owner: str, repo: str) -> bool:
+        self.generated_cosign_pub = None
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
             return True
         if not command_exists("cosign"):
@@ -766,7 +770,8 @@ class App:
             env["COSIGN_PASSWORD"] = ""
             proc = run(["cosign", "generate-key-pair"], cwd=tmpdir, env=env, check=False)
             key_path = tmpdir / "cosign.key"
-            if proc.returncode != 0 or not key_path.exists():
+            pub_path = tmpdir / "cosign.pub"
+            if proc.returncode != 0 or not key_path.exists() or not pub_path.exists():
                 self.gum.warn("Unable to generate cosign keypair. Builds will stay unsigned.")
                 return False
             with key_path.open("rb") as key_handle:
@@ -781,6 +786,7 @@ class App:
             if secret_proc.returncode != 0:
                 self.gum.warn("Unable to upload SIGNING_SECRET. Builds will stay unsigned.")
                 return False
+            self.generated_cosign_pub = pub_path.read_text()
         self.gum.success("Configured SIGNING_SECRET for image signing.")
         return True
 
@@ -797,6 +803,19 @@ class App:
         self.gum.spinner(
             f"Cloning {CONTAINERFILE_TEMPLATE_REPO}...",
             ["git", "clone", "--depth", "1", CONTAINERFILE_TEMPLATE_GIT_URL, str(target)],
+        )
+        shutil.rmtree(target / ".git", ignore_errors=True)
+
+    def clone_bluebuild_template(self, target: Path) -> None:
+        target = target.expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            if any(target.iterdir()):
+                raise CommandError(f"{target} already exists and is not empty.")
+            target.rmdir()
+        self.gum.spinner(
+            f"Cloning {BLUEBUILD_TEMPLATE_REPO}...",
+            ["git", "clone", "--depth", "1", BLUEBUILD_TEMPLATE_GIT_URL, str(target)],
         )
         shutil.rmtree(target / ".git", ignore_errors=True)
 
@@ -825,6 +844,8 @@ class App:
             create_args = ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"]
             if self.config.method == "containerfile":
                 create_args.extend(["--template", CONTAINERFILE_TEMPLATE_REPO])
+            elif self.config.method == "bluebuild":
+                create_args.extend(["--template", BLUEBUILD_TEMPLATE_REPO])
             self.gum.spinner(f"Creating {owner}/{repo}...", create_args)
         self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
 
@@ -1217,6 +1238,8 @@ class App:
             local_dir = Path.home() / self.config.repo_name
             if self.config.method == "containerfile":
                 self.clone_container_template(local_dir)
+            elif self.config.method == "bluebuild":
+                self.clone_bluebuild_template(local_dir)
             else:
                 local_dir.mkdir(parents=True, exist_ok=True)
             self.write_project_files(local_dir, include_workflow=False)
@@ -1416,6 +1439,131 @@ class App:
             output.append(line)
         return ensure_trailing_newline("\n".join(output))
 
+    def patch_bluebuild_readme(self, existing_text: str) -> str:
+        lines = existing_text.splitlines()
+        if lines and lines[0].startswith("# "):
+            badge = ""
+            if "&nbsp;" in lines[0]:
+                badge = lines[0][lines[0].find("&nbsp;") :]
+            lines[0] = f"# {self.config.repo_name}{badge}"
+        owner = self.config.github_user or "<username>"
+        repo_ref = f"{owner}/{self.config.repo_name}"
+        image_ref = f"ghcr.io/{repo_ref}"
+        updated = "\n".join(lines)
+        updated = updated.replace("blue-build/template", repo_ref)
+        updated = updated.replace("ghcr.io/blue-build/template", image_ref)
+        if not self.config.signing_enabled:
+            updated = updated.replace(
+                "- First rebase to the unsigned image, to get the proper signing keys and policies installed:",
+                "- Rebase to the latest image:",
+            )
+            updated = re.sub(
+                r"- Then rebase to the signed image, like so:\n"
+                r"  ```\n"
+                r".*?\n"
+                r"  ```\n"
+                r"- Reboot again to complete the installation\n"
+                r"  ```\n"
+                r"  systemctl reboot\n"
+                r"  ```",
+                "- Image signing is not configured for this repository yet, so stay on the unsigned image reference above.",
+                updated,
+                count=1,
+                flags=re.DOTALL,
+            )
+            marker = "\n## Verification\n"
+            if marker in updated:
+                updated = updated.split(marker, 1)[0].rstrip()
+                updated += (
+                    "\n\n## Verification\n\n"
+                    "Image signing is not configured for this repository yet.\n"
+                    "Configure `SIGNING_SECRET` and rerun the tool if you want signed BlueBuild images.\n"
+                )
+        return ensure_trailing_newline(updated)
+
+    def patch_bluebuild_workflow(self, existing_text: str) -> str:
+        lines = existing_text.splitlines()
+        output: list[str] = []
+        state_ignore_present = any(STATE_FILE in line for line in lines)
+        cosign_line_present = any("cosign_private_key:" in line for line in lines)
+        pending_schedule_multiline = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('- cron: "') or stripped.startswith("- cron: '"):
+                indent = line[: len(line) - len(line.lstrip())]
+                quote = '"' if '"' in stripped else "'"
+                output.append(f"{indent}- cron: {quote}{DEFAULT_GITHUB_BUILD_CRON}{quote}")
+                continue
+            if stripped == "- cron:":
+                output.append(line)
+                pending_schedule_multiline = True
+                continue
+            if pending_schedule_multiline and (stripped.startswith('"') or stripped.startswith("'")):
+                indent = line[: len(line) - len(line.lstrip())]
+                output.append(f'{indent}"{DEFAULT_GITHUB_BUILD_CRON}"')
+                pending_schedule_multiline = False
+                continue
+            if stripped.startswith("- ") and "minutes after last ublue images start building" in stripped:
+                continue
+            if stripped.startswith('- "**.md"') and not state_ignore_present:
+                output.append(line)
+                output.append(f'{line[: len(line) - len(line.lstrip())]}- "{STATE_FILE}"')
+                continue
+            if stripped.startswith("cosign_private_key:"):
+                if self.config.signing_enabled:
+                    output.append(line)
+                continue
+            output.append(line)
+        if self.config.signing_enabled and not cosign_line_present:
+            updated_output: list[str] = []
+            inserted = False
+            for line in output:
+                updated_output.append(line)
+                if line.strip() == "recipe: ${{ matrix.recipe }}" and not inserted:
+                    indent = line[: len(line) - len(line.lstrip())]
+                    updated_output.append(f"{indent}cosign_private_key: ${{{{ secrets.SIGNING_SECRET }}}}")
+                    inserted = True
+            output = updated_output
+        return ensure_trailing_newline("\n".join(output))
+
+    def write_bluebuild_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+        readme_path = base_dir / "README.md"
+        gitignore_path = base_dir / ".gitignore"
+        recipe_path = base_dir / "recipes/recipe.yml"
+        workflow_path = base_dir / ".github/workflows/build.yml"
+        files_system_dir = base_dir / "files/system"
+        modules_dir = base_dir / "modules"
+        cosign_pub_path = base_dir / "cosign.pub"
+
+        if readme_path.exists():
+            readme_path.write_text(self.patch_bluebuild_readme(readme_path.read_text()))
+        else:
+            readme_path.write_text(self.generate_readme())
+
+        existing_gitignore = gitignore_path.read_text().splitlines() if gitignore_path.exists() else []
+        for entry in ["cosign.key", "cosign.private"]:
+            if entry not in existing_gitignore:
+                existing_gitignore.append(entry)
+        gitignore_path.write_text(ensure_trailing_newline("\n".join(existing_gitignore)))
+
+        recipe_path.parent.mkdir(parents=True, exist_ok=True)
+        files_system_dir.mkdir(parents=True, exist_ok=True)
+        modules_dir.mkdir(parents=True, exist_ok=True)
+        (modules_dir / ".gitkeep").touch(exist_ok=True)
+        recipe_path.write_text(self.generate_bluebuild_recipe())
+
+        if include_workflow:
+            workflow_path.parent.mkdir(parents=True, exist_ok=True)
+            if workflow_path.exists():
+                workflow_path.write_text(self.patch_bluebuild_workflow(workflow_path.read_text()))
+            else:
+                workflow_path.write_text(self.generate_bluebuild_workflow())
+
+        if self.generated_cosign_pub:
+            cosign_pub_path.write_text(ensure_trailing_newline(self.generated_cosign_pub))
+        elif not self.config.signing_enabled:
+            cosign_pub_path.unlink(missing_ok=True)
+
     def write_container_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
         readme_path = base_dir / "README.md"
         gitignore_path = base_dir / ".gitignore"
@@ -1462,18 +1610,7 @@ class App:
         if self.config.method == "containerfile":
             self.write_container_project_files(base_dir, include_workflow=include_workflow)
         else:
-            (base_dir / "README.md").write_text(self.generate_readme())
-            (base_dir / ".gitignore").write_text("cosign.key\n_build*/\noutput/\n")
-            (base_dir / "recipes").mkdir(parents=True, exist_ok=True)
-            (base_dir / "files/system").mkdir(parents=True, exist_ok=True)
-            (base_dir / "modules").mkdir(parents=True, exist_ok=True)
-            (base_dir / "files/system/.gitkeep").touch()
-            (base_dir / "modules/.gitkeep").touch()
-            (base_dir / "recipes/recipe.yml").write_text(self.generate_bluebuild_recipe())
-            if include_workflow:
-                workflow_dir = base_dir / ".github/workflows"
-                workflow_dir.mkdir(parents=True, exist_ok=True)
-                (workflow_dir / "build.yml").write_text(self.generate_bluebuild_workflow())
+            self.write_bluebuild_project_files(base_dir, include_workflow=include_workflow)
 
     def generate_containerfile(self) -> str:
         return textwrap.dedent(
