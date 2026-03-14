@@ -13,7 +13,7 @@ class LegacyImportApp(App):
                 "Adopt an existing image repo into this tool.",
                 "Advanced tool for older or manually created repos.",
                 align="center",
-                width=68,
+                width=self.gum.content_width(reserve=8),
                 margin="1 2",
                 padding="1 2",
                 foreground=11,

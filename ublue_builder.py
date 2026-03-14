@@ -18,6 +18,7 @@ VERSION = "6.0"
 STATE_FILE = ".ublue-builder.json"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
+MAX_UI_WIDTH = 120
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 CONTAINERFILE_TEMPLATE_REV = "ec2ccf3b7683d8435a2611eb99d0b702102557b5"
 BLUEBUILD_TEMPLATE_REPO = "blue-build/template"
@@ -248,6 +249,19 @@ def run(
 
 
 class Gum:
+    def terminal_width(self) -> int:
+        return shutil.get_terminal_size((MAX_UI_WIDTH, 24)).columns
+
+    def content_width(self, *, max_width: int = MAX_UI_WIDTH, min_width: int = 40, reserve: int = 4) -> int:
+        return max(min_width, min(max_width, self.terminal_width() - reserve))
+
+    def form_width(self, *, max_width: int = 96, min_width: int = 40, reserve: int = 6) -> int:
+        return max(min_width, min(max_width, self.terminal_width() - reserve))
+
+    def table_widths(self, left: int, *, max_width: int = MAX_UI_WIDTH, min_right: int = 24) -> str:
+        right = max(min_right, self.content_width(max_width=max_width, reserve=0) - left - 4)
+        return f"{left},{right}"
+
     def require_interactive_success(self, proc: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
         if proc.returncode == 130:
             raise KeyboardInterrupt()
@@ -302,11 +316,11 @@ class Gum:
             self.clear()
         print()
         print(self.style(f"━━━  {title}  ━━━", foreground=117, bold=True))
-        print(self.style("Esc goes back or cancels. Ctrl+C quits.", faint=True, width=64))
+        print(self.style("Esc goes back or cancels. Ctrl+C quits.", faint=True, width=self.content_width()))
         print()
 
     def hint(self, message: str) -> None:
-        print(self.style(message, faint=True, width=64))
+        print(self.style(message, faint=True, width=self.content_width()))
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
         args = ["gum", "confirm", "--no-show-help", prompt]
@@ -420,7 +434,7 @@ class App:
                 "Build custom OCI images from Universal Blue base images.",
                 "Guided setup for beginner Bazzite, Aurora, and Bluefin users.",
                 align="center",
-                width=68,
+                width=self.gum.content_width(reserve=8),
                 margin="1 2",
                 padding="1 2",
                 foreground=117,
@@ -542,7 +556,7 @@ class App:
                 "This tool stores your image configuration on GitHub",
                 "and uses GitHub Actions to build it automatically.",
                 align="left",
-                width=64,
+                width=self.gum.content_width(max_width=100, reserve=8),
                 margin="0 2",
                 padding="1 2",
                 foreground=117,
@@ -572,7 +586,7 @@ class App:
                     "Go to https://github.com/signup in a browser,",
                     "create an account, then return here for login.",
                     align="left",
-                    width=64,
+                    width=self.gum.content_width(max_width=100, reserve=8),
                     margin="0 2",
                     padding="1 2",
                     foreground=11,
@@ -595,7 +609,7 @@ class App:
                 "The GitHub CLI will now guide you through login.",
                 "Use GitHub.com, HTTPS, and browser login.",
                 align="left",
-                width=64,
+                width=self.gum.content_width(max_width=100, reserve=8),
                 margin="0 2",
                 padding="1 2",
                 foreground=117,
@@ -749,13 +763,17 @@ class App:
         self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
         print()
         default_name = self.config.repo_name or DEFAULT_REPO_NAME
-        raw_name = self.gum.input(prompt="Repository name: ", placeholder=default_name, width=60)
+        raw_name = self.gum.input(
+            prompt="Repository name: ",
+            placeholder=default_name,
+            width=self.gum.form_width(max_width=72),
+        )
         self.config.repo_name = sanitize_slug(raw_name or default_name, default_name)
         print()
         self.config.image_desc = self.gum.input(
             prompt="Description: ",
             placeholder=self.config.image_desc,
-            width=80,
+            width=self.gum.form_width(max_width=110),
         ) or self.config.image_desc
         print()
         self.gum.hint("Repositories created by this tool are public.")
@@ -856,7 +874,7 @@ class App:
         self.gum.hint("The GitHub build will do the final check that each package name exists.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
         print()
-        raw = self.gum.write(placeholder="Enter package names...", height=6, width=70)
+        raw = self.gum.write(placeholder="Enter package names...", height=6, width=self.gum.form_width(max_width=110))
         self.add_packages_to_config((token.strip(",") for token in raw.split()), source_label="manual entry")
 
     def add_copr(self) -> None:
@@ -865,7 +883,11 @@ class App:
         self.gum.hint("Most users can skip this. Only use it if you know a package you need comes from that COPR.")
         self.gum.hint("Example: kwizart/fedy. Leave the repo field empty if you want to go back.")
         print()
-        repo = self.gum.input(prompt="COPR repo: ", placeholder="owner/project", width=50)
+        repo = self.gum.input(
+            prompt="COPR repo: ",
+            placeholder="owner/project",
+            width=self.gum.form_width(max_width=60),
+        )
         repo = repo.strip()
         if not repo:
             return
@@ -875,7 +897,11 @@ class App:
         proposed_copr_repos = unique([*self.config.copr_repos, repo])
         print()
         self.gum.hint("Enter the package names you want from this COPR. Leave it empty if you only want to add the repo.")
-        pkgs = self.gum.input(prompt="Packages: ", placeholder="package1 package2", width=60)
+        pkgs = self.gum.input(
+            prompt="Packages: ",
+            placeholder="package1 package2",
+            width=self.gum.form_width(max_width=80),
+        )
         packages = [pkg.strip(",") for pkg in pkgs.split()]
         if packages and not self.add_packages_to_config(packages, source_label=f"COPR {repo}"):
             return
@@ -938,7 +964,11 @@ class App:
         print()
         self.gum.hint("Type systemd service names like sshd.service or tailscaled.service.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
-        raw = self.gum.write(placeholder="Enter service names, one per line...", height=5, width=50)
+        raw = self.gum.write(
+            placeholder="Enter service names, one per line...",
+            height=5,
+            width=self.gum.form_width(max_width=80),
+        )
         self.config.services.extend(line.strip() for line in raw.splitlines())
         self.config.normalize()
         self.gum.success(f"Total services configured: {len(self.config.services)}")
@@ -948,7 +978,11 @@ class App:
             self.gum.warn("Flatpaks in generated config are only supported in BlueBuild mode.")
             return
         self.gum.hint("Enter one Flatpak ID per line. Leave this empty if you want to go back.")
-        raw = self.gum.write(placeholder="Enter flatpak IDs, one per line...", height=5, width=60)
+        raw = self.gum.write(
+            placeholder="Enter flatpak IDs, one per line...",
+            height=5,
+            width=self.gum.form_width(max_width=90),
+        )
         self.config.flatpaks.extend(line.strip() for line in raw.splitlines())
         self.config.normalize()
         self.gum.success(f"Total flatpaks configured: {len(self.config.flatpaks)}")
@@ -965,7 +999,7 @@ class App:
             ("Flatpaks", ", ".join(self.config.flatpaks) or "(none)"),
             ("Removed Base Packages", ", ".join(self.config.removed_packages) or "(none)"),
         ]
-        self.gum.table(rows, columns="Setting,Value", widths="20,60")
+        self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
         print()
         self.gum.enter_to_continue("Press Enter to go back to the software menu...")
 
@@ -1000,7 +1034,7 @@ class App:
             ("Flatpaks", str(len(self.config.flatpaks))),
             ("Removed Base Packages", str(len(self.config.removed_packages))),
         ]
-        self.gum.table(rows, columns="Setting,Value", widths="20,55")
+        self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
         if self.config.removed_packages and self.config.method != "containerfile":
             print()
             self.gum.warn("Removed base packages are only applied in Containerfile mode.")
@@ -1089,7 +1123,7 @@ class App:
             ("Layered Packages", str(len(self.config.scanned_packages))),
             ("Removed Base Packages", str(len(self.config.scanned_removed))),
         ]
-        self.gum.table(rows, columns="Setting,Value", widths="22,52")
+        self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(22))
         print()
 
         if self.config.scanned_packages:
@@ -1325,7 +1359,7 @@ class App:
             self.gum.style(
                 *summary_lines,
                 align="center",
-                width=68,
+                width=self.gum.content_width(reserve=8),
                 margin="1",
                 padding="1 2",
                 foreground=10,
@@ -1367,7 +1401,13 @@ class App:
         print()
         choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
         if choice == manual_label:
-            repo = sanitize_slug(self.gum.input(prompt="Repository name: ", placeholder=DEFAULT_REPO_NAME, width=50))
+            repo = sanitize_slug(
+                self.gum.input(
+                    prompt="Repository name: ",
+                    placeholder=DEFAULT_REPO_NAME,
+                    width=self.gum.form_width(max_width=72),
+                )
+            )
             self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name"])
             if require_state_file and not self.repo_has_state_file(self.github_user, repo):
                 raise CommandError(
@@ -1692,7 +1732,11 @@ class App:
         self.gum.hint("Enter a short description for this image.")
         self.gum.hint("Leave it empty if you want to keep the current description.")
         print()
-        value = self.gum.input(prompt="New description: ", placeholder=self.config.image_desc, width=80)
+        value = self.gum.input(
+            prompt="New description: ",
+            placeholder=self.config.image_desc,
+            width=self.gum.form_width(max_width=110),
+        )
         if value:
             self.config.image_desc = value
 
@@ -1760,7 +1804,11 @@ class App:
         selected = choice[0] if choice else "Back"
         if selected == "Add removed base packages":
             self.gum.hint("Enter one package name per line. Leave this empty if you want to go back.")
-            raw = self.gum.write(placeholder="Enter package names, one per line...", height=6, width=60)
+            raw = self.gum.write(
+                placeholder="Enter package names, one per line...",
+                height=6,
+                width=self.gum.form_width(max_width=90),
+            )
             self.config.removed_packages.extend(line.strip() for line in raw.splitlines())
             self.config.normalize()
         elif selected == "Remove removed base packages":
