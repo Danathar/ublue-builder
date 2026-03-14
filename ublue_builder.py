@@ -1804,7 +1804,7 @@ class App:
         while True:
             self.gum.header("Edit Packages")
             self.gum.hint("Choose how you want to change packages.")
-            self.gum.hint("Choose Back to return to the update menu.")
+            self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
             print()
             try:
                 choice = self.gum.choose(
@@ -1830,7 +1830,7 @@ class App:
         while True:
             self.gum.header("Edit COPR Repositories")
             self.gum.hint("Choose how you want to change COPR repositories.")
-            self.gum.hint("Choose Back to return to the update menu.")
+            self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
             print()
             try:
                 choice = self.gum.choose(
@@ -1884,7 +1884,7 @@ class App:
 
     def manage_services(self) -> None:
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose Back to return to the previous menu.")
+        self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
         print()
         try:
             choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
@@ -1901,7 +1901,7 @@ class App:
             self.gum.warn("Flatpak management in generated config is only available for BlueBuild.")
             return
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose Back to return to the previous menu.")
+        self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
         print()
         try:
             choice = self.gum.choose(["Add Flatpaks", "Remove Flatpaks", "Back"], height=5)
@@ -1918,7 +1918,7 @@ class App:
             self.gum.warn("Removed base packages are only supported in Containerfile mode.")
             return
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose Back to return to the previous menu.")
+        self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
         print()
         try:
             choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
