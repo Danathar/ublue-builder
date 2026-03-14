@@ -478,6 +478,8 @@ class App:
             )
         )
         print()
+        self.gum.hint("Choose one option below, then press Enter.")
+        print()
         choice = self.gum.choose(
             [
                 "I already have a GitHub account - log me in",
@@ -680,12 +682,17 @@ class App:
                 self.view_selections()
 
     def select_from_catalog(self) -> None:
+        self.gum.header("Package Catalog")
+        self.gum.hint("Choose a package group, then press Enter.")
+        print()
         options = list(CATALOGS) + ["Back"]
         choice = self.gum.choose(options, height=10)
         selected = choice[0] if choice else "Back"
         if selected == "Back":
             return
         current = set(self.config.packages)
+        self.gum.hint("Choose the packages you want from this group, then press Enter.")
+        print()
         picked = self.gum.choose(
             CATALOGS[selected],
             height=20,
@@ -753,6 +760,8 @@ class App:
 
     def show_summary(self) -> None:
         self.gum.header("Review Build Configuration")
+        self.gum.hint("This screen shows your current settings. The next prompt will ask what to do next.")
+        print()
         rows = [
             ("Repository", f"{self.github_user}/{self.config.repo_name}" if self.github_user else self.config.repo_name),
             ("Method", self.config.method),
@@ -829,6 +838,8 @@ class App:
         print()
 
         if self.config.scanned_packages:
+            self.gum.hint("Choose the layered packages you want to carry over, then press Enter.")
+            print()
             selected = self.gum.choose(
                 self.config.scanned_packages,
                 height=20,
@@ -843,6 +854,8 @@ class App:
                 return False
 
         if self.config.scanned_removed:
+            self.gum.hint("Choose any base packages you want removed in the new image, then press Enter.")
+            print()
             selected_removed = self.gum.choose(
                 self.config.scanned_removed,
                 height=20,
@@ -1078,6 +1091,8 @@ class App:
             mapping[label] = (self.github_user, item["name"])
         manual_label = "Type a repository name manually"
         labels.append(manual_label)
+        self.gum.hint("Choose a repository below, or pick the last option to type its name yourself.")
+        print()
         choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
         if choice == manual_label:
             repo = sanitize_slug(self.gum.input(prompt="Repository name: ", placeholder=DEFAULT_REPO_NAME, width=50))
@@ -1297,6 +1312,8 @@ class App:
     def update_menu(self) -> None:
         while True:
             self.gum.header("Update Image")
+            self.gum.hint("Choose what you want to change. Pick Done when you are finished.")
+            print()
             choice = self.gum.choose(
                 [
                     "Add packages from catalog",
@@ -1349,10 +1366,14 @@ class App:
         if not values:
             self.gum.warn("Nothing to remove.")
             return values
+        self.gum.hint("Choose the items you want to remove, then press Enter.")
+        print()
         selected = set(self.gum.choose(values, no_limit=True, height=20, header=header))
         return [value for value in values if value not in selected]
 
     def manage_services(self) -> None:
+        self.gum.hint("Choose what you want to do with services, then press Enter.")
+        print()
         choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
         selected = choice[0] if choice else "Back"
         if selected == "Add services":
@@ -1364,6 +1385,8 @@ class App:
         if self.config.method != "bluebuild":
             self.gum.warn("Flatpak management in generated config is only available for BlueBuild.")
             return
+        self.gum.hint("Choose what you want to do with Flatpaks, then press Enter.")
+        print()
         choice = self.gum.choose(["Add Flatpaks", "Remove Flatpaks", "Back"], height=5)
         selected = choice[0] if choice else "Back"
         if selected == "Add Flatpaks":
@@ -1375,6 +1398,8 @@ class App:
         if self.config.method != "containerfile":
             self.gum.warn("Removed base packages are only supported in Containerfile mode.")
             return
+        self.gum.hint("Choose what you want to do with removed base packages, then press Enter.")
+        print()
         choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
         selected = choice[0] if choice else "Back"
         if selected == "Add removed base packages":
