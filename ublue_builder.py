@@ -22,8 +22,10 @@ DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 CONTAINERFILE_TEMPLATE_GIT_URL = f"https://github.com/{CONTAINERFILE_TEMPLATE_REPO}.git"
+CONTAINERFILE_TEMPLATE_REV = "ec2ccf3b7683d8435a2611eb99d0b702102557b5"
 BLUEBUILD_TEMPLATE_REPO = "blue-build/template"
 BLUEBUILD_TEMPLATE_GIT_URL = f"https://github.com/{BLUEBUILD_TEMPLATE_REPO}.git"
+BLUEBUILD_TEMPLATE_REV = "d3f382af4c40c80bbd207507f4ead99b6144a281"
 ALLOWED_METHODS = {"containerfile", "bluebuild"}
 PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
 COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
@@ -377,7 +379,7 @@ class App:
                 f"Universal Blue Custom Image Builder  v{VERSION}",
                 "",
                 "Build custom OCI images from Universal Blue base images.",
-                "Python rewrite with canonical JSON state and gum UI.",
+                "Guided setup for beginner Bazzite, Aurora, and Bluefin users.",
                 align="center",
                 width=68,
                 margin="1 2",
@@ -542,12 +544,9 @@ class App:
                     "Create New Image",
                     "Scan OS & Migrate Layered Packages",
                     "Update Existing Image",
-                    "Import Legacy Repo",
-                    "Build & Install Locally",
-                    "Set Up Nightly Local Build",
                     "Quit",
                 ],
-                height=12,
+                height=8,
             )
             selected = action[0] if action else "Quit"
             if selected == "Quit":
@@ -561,15 +560,6 @@ class App:
                 return
             if selected == "Update Existing Image":
                 self.update_existing_image()
-                return
-            if selected == "Import Legacy Repo":
-                self.import_legacy_repo()
-                return
-            if selected == "Build & Install Locally":
-                self.local_build_image()
-                return
-            if selected == "Set Up Nightly Local Build":
-                self.setup_nightly_build()
                 return
 
     def create_new_image(self, *, scanned: bool = False) -> None:
@@ -912,31 +902,39 @@ class App:
     def clone_repo(self, owner: str, repo: str, target: Path) -> None:
         self.gum.spinner(f"Cloning {owner}/{repo}...", ["gh", "repo", "clone", f"{owner}/{repo}", str(target)])
 
-    def clone_container_template(self, target: Path) -> None:
+    def clone_template_repo(self, target: Path, *, repo: str, git_url: str, revision: str) -> None:
         target = target.expanduser()
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             if any(target.iterdir()):
                 raise CommandError(f"{target} already exists and is not empty.")
             target.rmdir()
+        target.mkdir(parents=True, exist_ok=False)
+        self.gum.spinner(f"Downloading {repo}...", ["git", "init", "-q", "-b", "template"], cwd=target)
+        run(["git", "remote", "add", "origin", git_url], cwd=target)
         self.gum.spinner(
-            f"Cloning {CONTAINERFILE_TEMPLATE_REPO}...",
-            ["git", "clone", "--depth", "1", CONTAINERFILE_TEMPLATE_GIT_URL, str(target)],
+            f"Fetching {repo}...",
+            ["git", "fetch", "--depth", "1", "origin", revision],
+            cwd=target,
         )
+        run(["git", "checkout", "--detach", "FETCH_HEAD"], cwd=target)
         shutil.rmtree(target / ".git", ignore_errors=True)
 
-    def clone_bluebuild_template(self, target: Path) -> None:
-        target = target.expanduser()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            if any(target.iterdir()):
-                raise CommandError(f"{target} already exists and is not empty.")
-            target.rmdir()
-        self.gum.spinner(
-            f"Cloning {BLUEBUILD_TEMPLATE_REPO}...",
-            ["git", "clone", "--depth", "1", BLUEBUILD_TEMPLATE_GIT_URL, str(target)],
+    def clone_container_template(self, target: Path) -> None:
+        self.clone_template_repo(
+            target,
+            repo=CONTAINERFILE_TEMPLATE_REPO,
+            git_url=CONTAINERFILE_TEMPLATE_GIT_URL,
+            revision=CONTAINERFILE_TEMPLATE_REV,
         )
-        shutil.rmtree(target / ".git", ignore_errors=True)
+
+    def clone_bluebuild_template(self, target: Path) -> None:
+        self.clone_template_repo(
+            target,
+            repo=BLUEBUILD_TEMPLATE_REPO,
+            git_url=BLUEBUILD_TEMPLATE_GIT_URL,
+            revision=BLUEBUILD_TEMPLATE_REV,
+        )
 
     def current_branch(self, repo_dir: Path) -> str:
         proc = run(["git", "branch", "--show-current"], cwd=repo_dir)
