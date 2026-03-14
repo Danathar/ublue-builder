@@ -303,7 +303,7 @@ class Gum:
         print(self.style(message, faint=True, width=64))
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
-        args = ["gum", "confirm", "--show-help", prompt]
+        args = ["gum", "confirm", "--no-show-help", prompt]
         args.append("--default=true" if default else "--default=false")
         return run(args, check=False, capture=False).returncode == 0
 
@@ -315,7 +315,7 @@ class Gum:
         placeholder: str | None = None,
         width: int | None = None,
     ) -> str:
-        args = ["gum", "input", "--show-help", "--prompt", prompt]
+        args = ["gum", "input", "--no-show-help", "--prompt", prompt]
         if value is not None:
             args.extend(["--value", value])
         if placeholder is not None:
@@ -327,7 +327,7 @@ class Gum:
     def write(self, *, placeholder: str, height: int, width: int) -> str:
         return self.require_interactive_success(
             self.interactive_stdout(
-                ["gum", "write", "--show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
+                ["gum", "write", "--no-show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
             )
         ).stdout.rstrip("\n")
 
@@ -343,7 +343,7 @@ class Gum:
         selected_prefix: str | None = None,
         unselected_prefix: str | None = None,
     ) -> list[str]:
-        args = ["gum", "choose", "--show-help", "--height", str(height)]
+        args = ["gum", "choose", "--no-show-help", "--height", str(height)]
         if no_limit:
             args.append("--no-limit")
         if selected:
@@ -363,7 +363,7 @@ class Gum:
     def filter(self, options: Sequence[str], *, height: int = 20, placeholder: str = "Search...") -> str:
         proc = self.require_interactive_success(
             self.interactive_stdout(
-                ["gum", "filter", "--show-help", "--height", str(height), "--placeholder", placeholder],
+                ["gum", "filter", "--no-show-help", "--height", str(height), "--placeholder", placeholder],
                 stdin="\n".join(options) + "\n",
             )
         )
@@ -394,7 +394,7 @@ class Gum:
             Path(output_path).unlink(missing_ok=True)
 
     def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-        self.require_interactive_success(self.interactive_stdout(["gum", "input", "--show-help", "--placeholder", placeholder]))
+        self.require_interactive_success(self.interactive_stdout(["gum", "input", "--no-show-help", "--placeholder", placeholder]))
 
 
 class App:
@@ -1032,7 +1032,7 @@ class App:
         print()
 
         if self.config.scanned_packages:
-            self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to carry over.")
+            self.gum.hint("Use the arrow keys to move. Press x to select or deselect packages to carry over.")
             self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
             try:
@@ -1042,6 +1042,8 @@ class App:
                     no_limit=True,
                     selected=self.config.scanned_packages,
                     header="Layered Packages",
+                    selected_prefix="[x] ",
+                    unselected_prefix="[ ] ",
                 )
             except ScreenBack:
                 return False
@@ -1052,7 +1054,7 @@ class App:
                 return False
 
         if self.config.scanned_removed:
-            self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to remove.")
+            self.gum.hint("Use the arrow keys to move. Press x to select or deselect base packages to remove.")
             self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
             try:
@@ -1062,6 +1064,8 @@ class App:
                     no_limit=True,
                     selected=self.config.scanned_removed,
                     header="Base Packages To Remove",
+                    selected_prefix="[x] ",
+                    unselected_prefix="[ ] ",
                 )
             except ScreenBack:
                 return False
@@ -1635,10 +1639,19 @@ class App:
         if not values:
             self.gum.warn("Nothing to remove.")
             return values
-        self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark items to remove.")
+        self.gum.hint("Use the arrow keys to move. Press x to select or deselect items to remove.")
         self.gum.hint("Press Enter when you are finished, or leave everything unselected to keep everything.")
         print()
-        selected = set(self.gum.choose(values, no_limit=True, height=20, header=header))
+        selected = set(
+            self.gum.choose(
+                values,
+                no_limit=True,
+                height=20,
+                header=header,
+                selected_prefix="[x] ",
+                unselected_prefix="[ ] ",
+            )
+        )
         return [value for value in values if value not in selected]
 
     def manage_services(self) -> None:
