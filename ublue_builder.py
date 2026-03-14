@@ -1950,9 +1950,7 @@ class App:
         print()
         if self.gum.confirm("View full diff?", default=False):
             full_diff = run(["git", "diff"], cwd=repo_dir, check=False).stdout
-            self.gum.hint("The full diff will open in a pager. Press q there to close it and return here.")
-            print()
-            self.gum.pager(full_diff)
+            self.gum.pager(self.pager_text_with_hint(full_diff))
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
         run(["git", "add", "-A"], cwd=repo_dir)
@@ -1960,6 +1958,13 @@ class App:
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
         self.gum.success(f"Pushed changes to {owner}/{repo}.")
         self.gum.enter_to_continue("Press Enter to return to the main menu...")
+
+    def pager_text_with_hint(self, text: str) -> str:
+        hint = "Press q to close this diff and return to the previous screen."
+        body = text.rstrip("\n")
+        if not body:
+            return hint + "\n"
+        return f"{hint}\n\n{body}\n"
 
     def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
         invalid = [value for value in values if not pattern.fullmatch(value)]

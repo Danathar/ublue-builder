@@ -461,6 +461,12 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(choices["Flatpaks"], "1 added")
         self.assertEqual(choices["Removed base packages"], "Containerfile only")
 
+    def test_pager_text_with_hint_puts_exit_instruction_in_pager(self) -> None:
+        app = self.make_app()
+        text = app.pager_text_with_hint("diff --git a/file b/file\n+new line\n")
+        self.assertTrue(text.startswith("Press q to close this diff and return to the previous screen."))
+        self.assertIn("diff --git a/file b/file", text)
+
 
 if __name__ == "__main__":
     unittest.main()
