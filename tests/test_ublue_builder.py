@@ -14,8 +14,8 @@ from ublue_builder import (
     CONTAINERFILE_TEMPLATE_DIR,
     Config,
     Gum,
+    ScreenBack,
     config_from_state_payload,
-    UserQuit,
 )
 
 
@@ -228,11 +228,11 @@ class BuilderTests(unittest.TestCase):
             self.assertTrue((target / "Containerfile").is_file())
             self.assertFalse((target / ".template-source").exists())
 
-    def test_gum_input_raises_user_quit_when_interactive_command_aborts(self) -> None:
+    def test_gum_input_raises_screen_back_when_interactive_command_aborts(self) -> None:
         gum = Gum()
         completed = subprocess.CompletedProcess(["gum", "input"], 130, "", "")
         with patch.object(Gum, "interactive_stdout", return_value=completed):
-            with self.assertRaises(UserQuit):
+            with self.assertRaises(ScreenBack):
                 gum.input(prompt="Repository name: ")
 
     def test_update_task_choices_show_current_status(self) -> None:

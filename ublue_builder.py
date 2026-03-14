@@ -211,7 +211,7 @@ class CommandError(RuntimeError):
     pass
 
 
-class UserQuit(RuntimeError):
+class ScreenBack(RuntimeError):
     pass
 
 
@@ -244,7 +244,7 @@ def run(
 class Gum:
     def require_interactive_success(self, proc: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
         if proc.returncode != 0:
-            raise UserQuit()
+            raise ScreenBack()
         return proc
 
     def clear(self) -> None:
@@ -294,7 +294,7 @@ class Gum:
             self.clear()
         print()
         print(self.style(f"━━━  {title}  ━━━", foreground=117, bold=True))
-        print(self.style("Press q to quit before making changes.", faint=True, width=64))
+        print(self.style("Esc goes back or cancels. Ctrl+C quits.", faint=True, width=64))
         print()
 
     def hint(self, message: str) -> None:
@@ -490,6 +490,12 @@ class App:
         self.gum.enter_to_continue("Press Enter to continue...")
 
     def require_github(self) -> bool:
+        try:
+            return self._require_github()
+        except ScreenBack:
+            return False
+
+    def _require_github(self) -> bool:
         if self.github_available and self.github_user:
             return True
         if not command_exists("gh"):
@@ -589,15 +595,18 @@ class App:
             self.gum.header("Main Menu")
             self.gum.hint("Use the arrow keys to move and Enter to choose.")
             print()
-            action = self.gum.choose(
-                [
-                    "Create New Image",
-                    "Scan OS & Migrate Layered Packages",
-                    "Update Existing Image",
-                    "Quit",
-                ],
-                height=8,
-            )
+            try:
+                action = self.gum.choose(
+                    [
+                        "Create New Image",
+                        "Scan OS & Migrate Layered Packages",
+                        "Update Existing Image",
+                        "Quit",
+                    ],
+                    height=8,
+                )
+            except ScreenBack:
+                raise SystemExit(0)
             selected = action[0] if action else "Quit"
             if selected == "Quit":
                 raise SystemExit(0)
@@ -616,23 +625,29 @@ class App:
         total_steps = 5
         step = 1
         while True:
-            if step == 1:
-                self.choose_method(step=step, total_steps=total_steps)
-                step = 2
+            try:
+                if step == 1:
+                    self.choose_method(step=step, total_steps=total_steps)
+                    step = 2
+                    continue
+                if step == 2:
+                    self.choose_base_image(step=step, total_steps=total_steps)
+                    step = 3
+                    continue
+                if step == 3:
+                    self.configure_repo(step=step, total_steps=total_steps)
+                    step = 4
+                    continue
+                if step == 4:
+                    self.select_packages(step=step, total_steps=total_steps)
+                    step = 5
+                    continue
+                action = self.review_new_image(step=step, total_steps=total_steps)
+            except ScreenBack:
+                if step == 1:
+                    return
+                step -= 1
                 continue
-            if step == 2:
-                self.choose_base_image(step=step, total_steps=total_steps)
-                step = 3
-                continue
-            if step == 3:
-                self.configure_repo(step=step, total_steps=total_steps)
-                step = 4
-                continue
-            if step == 4:
-                self.select_packages(step=step, total_steps=total_steps)
-                step = 5
-                continue
-            action = self.review_new_image(step=step, total_steps=total_steps)
             if action == "build":
                 if self.do_build():
                     return
@@ -715,13 +730,12 @@ class App:
         self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
         print()
         default_name = self.config.repo_name or DEFAULT_REPO_NAME
-        raw_name = self.gum.input(prompt="Repository name: ", value=default_name, placeholder=default_name, width=60)
-        self.config.repo_name = sanitize_slug(raw_name, default_name)
+        raw_name = self.gum.input(prompt="Repository name: ", placeholder=default_name, width=60)
+        self.config.repo_name = sanitize_slug(raw_name or default_name, default_name)
         print()
         self.config.image_desc = self.gum.input(
             prompt="Description: ",
-            value=self.config.image_desc,
-            placeholder="Description",
+            placeholder=self.config.image_desc,
             width=80,
         ) or self.config.image_desc
         print()
@@ -760,18 +774,21 @@ class App:
             if selected == "Done":
                 self.config.normalize()
                 return
-            if selected == "Browse package catalog":
-                self.select_from_catalog()
-            elif selected == "Type package names manually":
-                self.manual_packages()
-            elif selected == "Add a COPR repository":
-                self.add_copr()
-            elif selected == "Add systemd services to enable":
-                self.add_services()
-            elif selected == "Add Flatpaks (BlueBuild only)":
-                self.add_flatpaks()
-            elif selected == "View current selections":
-                self.view_selections()
+            try:
+                if selected == "Browse package catalog":
+                    self.select_from_catalog()
+                elif selected == "Type package names manually":
+                    self.manual_packages()
+                elif selected == "Add a COPR repository":
+                    self.add_copr()
+                elif selected == "Add systemd services to enable":
+                    self.add_services()
+                elif selected == "Add Flatpaks (BlueBuild only)":
+                    self.add_flatpaks()
+                elif selected == "View current selections":
+                    self.view_selections()
+            except ScreenBack:
+                continue
 
     def select_from_catalog(self) -> None:
         self.gum.header("Package Catalog")
@@ -779,7 +796,10 @@ class App:
         self.gum.hint("Choose Back to return to the previous menu.")
         print()
         options = list(CATALOGS) + ["Back"]
-        choice = self.gum.choose(options, height=10)
+        try:
+            choice = self.gum.choose(options, height=10)
+        except ScreenBack:
+            return
         selected = choice[0] if choice else "Back"
         if selected == "Back":
             return
@@ -787,13 +807,16 @@ class App:
         self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages.")
         self.gum.hint("Press Enter when you are finished, or leave everything unselected to make no changes.")
         print()
-        picked = self.gum.choose(
-            CATALOGS[selected],
-            height=20,
-            no_limit=True,
-            selected=[pkg for pkg in CATALOGS[selected] if pkg in current],
-            header=selected,
-        )
+        try:
+            picked = self.gum.choose(
+                CATALOGS[selected],
+                height=20,
+                no_limit=True,
+                selected=[pkg for pkg in CATALOGS[selected] if pkg in current],
+                header=selected,
+            )
+        except ScreenBack:
+            return
         self.add_packages_to_config(picked, source_label=selected)
 
     def manual_packages(self) -> None:
@@ -974,13 +997,16 @@ class App:
             self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to carry over.")
             self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
-            selected = self.gum.choose(
-                self.config.scanned_packages,
-                height=20,
-                no_limit=True,
-                selected=self.config.scanned_packages,
-                header="Layered Packages",
-            )
+            try:
+                selected = self.gum.choose(
+                    self.config.scanned_packages,
+                    height=20,
+                    no_limit=True,
+                    selected=self.config.scanned_packages,
+                    header="Layered Packages",
+                )
+            except ScreenBack:
+                return False
             self.config.packages = selected
         else:
             self.gum.warn("No layered packages found.")
@@ -991,13 +1017,16 @@ class App:
             self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to remove.")
             self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
-            selected_removed = self.gum.choose(
-                self.config.scanned_removed,
-                height=20,
-                no_limit=True,
-                selected=self.config.scanned_removed,
-                header="Base Packages To Remove",
-            )
+            try:
+                selected_removed = self.gum.choose(
+                    self.config.scanned_removed,
+                    height=20,
+                    no_limit=True,
+                    selected=self.config.scanned_removed,
+                    header="Base Packages To Remove",
+                )
+            except ScreenBack:
+                return False
             self.config.removed_packages = selected_removed
 
         self.config.normalize()
@@ -1207,7 +1236,7 @@ class App:
 
     def select_repo(self, *, require_state_file: bool = False) -> tuple[str, str]:
         if not self.require_github():
-            raise SystemExit(1)
+            raise ScreenBack()
         repos = self.gh_json_with_spinner(
             "Fetching repositories from GitHub...",
             ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
@@ -1249,7 +1278,10 @@ class App:
     def update_existing_image(self) -> None:
         if not self.require_github():
             return
-        owner, repo = self.select_repo(require_state_file=True)
+        try:
+            owner, repo = self.select_repo(require_state_file=True)
+        except ScreenBack:
+            return
         self.config.repo_name = repo
         self.config.github_user = owner
         with tempfile.TemporaryDirectory(prefix="ublue-update.") as tmp:
@@ -1271,7 +1303,10 @@ class App:
     def import_legacy_repo(self) -> None:
         if not self.require_github():
             return
-        owner, repo = self.select_repo()
+        try:
+            owner, repo = self.select_repo()
+        except ScreenBack:
+            return
         with tempfile.TemporaryDirectory(prefix="ublue-import.") as tmp:
             tmpdir = Path(tmp)
             self.clone_repo(owner, repo, tmpdir)
@@ -1462,7 +1497,10 @@ class App:
             save_label = "Save and push changes"
             cancel_label = "Cancel and go back"
             options.extend([review_label, save_label, cancel_label])
-            choice = self.gum.choose(options, height=14)
+            try:
+                choice = self.gum.choose(options, height=14)
+            except ScreenBack:
+                return False
             selected = choice[0] if choice else cancel_label
             if selected == save_label:
                 self.config.normalize()
@@ -1474,21 +1512,24 @@ class App:
                 self.gum.enter_to_continue("Press Enter to go back to the update menu...")
                 continue
             task = mapping[selected]
-            if task == "Packages":
-                self.manage_packages()
-            elif task == "Base image":
-                self.config.base_image_uri = ""
-                self.choose_base_image()
-            elif task == "Description":
-                self.edit_description()
-            elif task == "COPR repositories":
-                self.manage_copr_repos()
-            elif task == "Services":
-                self.manage_services()
-            elif task == "Flatpaks":
-                self.manage_flatpaks()
-            elif task == "Removed base packages":
-                self.manage_removed_packages()
+            try:
+                if task == "Packages":
+                    self.manage_packages()
+                elif task == "Base image":
+                    self.config.base_image_uri = ""
+                    self.choose_base_image()
+                elif task == "Description":
+                    self.edit_description()
+                elif task == "COPR repositories":
+                    self.manage_copr_repos()
+                elif task == "Services":
+                    self.manage_services()
+                elif task == "Flatpaks":
+                    self.manage_flatpaks()
+                elif task == "Removed base packages":
+                    self.manage_removed_packages()
+            except ScreenBack:
+                continue
 
     def manage_packages(self) -> None:
         while True:
@@ -1496,19 +1537,25 @@ class App:
             self.gum.hint("Choose how you want to change packages.")
             self.gum.hint("Choose Back to return to the update menu.")
             print()
-            choice = self.gum.choose(
-                ["Add packages from catalog", "Add packages manually", "Remove packages", "Back"],
-                height=8,
-            )
+            try:
+                choice = self.gum.choose(
+                    ["Add packages from catalog", "Add packages manually", "Remove packages", "Back"],
+                    height=8,
+                )
+            except ScreenBack:
+                return
             selected = choice[0] if choice else "Back"
             if selected == "Back":
                 return
-            if selected == "Add packages from catalog":
-                self.select_from_catalog()
-            elif selected == "Add packages manually":
-                self.manual_packages()
-            elif selected == "Remove packages":
-                self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
+            try:
+                if selected == "Add packages from catalog":
+                    self.select_from_catalog()
+                elif selected == "Add packages manually":
+                    self.manual_packages()
+                elif selected == "Remove packages":
+                    self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
+            except ScreenBack:
+                continue
 
     def manage_copr_repos(self) -> None:
         while True:
@@ -1516,24 +1563,30 @@ class App:
             self.gum.hint("Choose how you want to change COPR repositories.")
             self.gum.hint("Choose Back to return to the update menu.")
             print()
-            choice = self.gum.choose(
-                ["Add a COPR repository", "Remove a COPR repository", "Back"],
-                height=6,
-            )
+            try:
+                choice = self.gum.choose(
+                    ["Add a COPR repository", "Remove a COPR repository", "Back"],
+                    height=6,
+                )
+            except ScreenBack:
+                return
             selected = choice[0] if choice else "Back"
             if selected == "Back":
                 return
-            if selected == "Add a COPR repository":
-                self.add_copr()
-            elif selected == "Remove a COPR repository":
-                self.config.copr_repos = self.choose_to_remove(self.config.copr_repos, "Remove COPR Repos")
+            try:
+                if selected == "Add a COPR repository":
+                    self.add_copr()
+                elif selected == "Remove a COPR repository":
+                    self.config.copr_repos = self.choose_to_remove(self.config.copr_repos, "Remove COPR Repos")
+            except ScreenBack:
+                continue
 
     def edit_description(self) -> None:
         self.gum.header("Edit Description")
         self.gum.hint("Enter a short description for this image.")
         self.gum.hint("Leave it empty if you want to keep the current description.")
         print()
-        value = self.gum.input(prompt="New description: ", value=self.config.image_desc, width=80)
+        value = self.gum.input(prompt="New description: ", placeholder=self.config.image_desc, width=80)
         if value:
             self.config.image_desc = value
 
@@ -1551,7 +1604,10 @@ class App:
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("Choose Back to return to the previous menu.")
         print()
-        choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
+        try:
+            choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
+        except ScreenBack:
+            return
         selected = choice[0] if choice else "Back"
         if selected == "Add services":
             self.add_services()
@@ -1565,7 +1621,10 @@ class App:
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("Choose Back to return to the previous menu.")
         print()
-        choice = self.gum.choose(["Add Flatpaks", "Remove Flatpaks", "Back"], height=5)
+        try:
+            choice = self.gum.choose(["Add Flatpaks", "Remove Flatpaks", "Back"], height=5)
+        except ScreenBack:
+            return
         selected = choice[0] if choice else "Back"
         if selected == "Add Flatpaks":
             self.add_flatpaks()
@@ -1579,7 +1638,10 @@ class App:
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("Choose Back to return to the previous menu.")
         print()
-        choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
+        try:
+            choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
+        except ScreenBack:
+            return
         selected = choice[0] if choice else "Back"
         if selected == "Add removed base packages":
             self.gum.hint("Enter one package name per line. Leave this empty if you want to go back.")
@@ -2234,7 +2296,7 @@ def main() -> None:
     app = App()
     try:
         app.run_main()
-    except UserQuit:
+    except ScreenBack:
         print()
         raise SystemExit(0)
     except CommandError as exc:

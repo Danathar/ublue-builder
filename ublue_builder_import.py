@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from ublue_builder import App, CommandError, UserQuit
+from ublue_builder import App, CommandError, ScreenBack
 
 
 class LegacyImportApp(App):
@@ -33,7 +33,7 @@ def main() -> None:
     app = LegacyImportApp()
     try:
         app.run_main()
-    except UserQuit:
+    except ScreenBack:
         print()
         raise SystemExit(0)
     except CommandError as exc:
