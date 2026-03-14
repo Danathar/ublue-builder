@@ -238,6 +238,10 @@ def run(
 
 
 class Gum:
+    def clear(self) -> None:
+        if sys.stdout.isatty() and os.environ.get("TERM"):
+            run(["clear"], capture=False, check=False)
+
     def interactive_stdout(self, args: Sequence[str], *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             list(args),
@@ -276,7 +280,9 @@ class Gum:
     def error(self, message: str) -> None:
         self.log("error", message)
 
-    def header(self, title: str) -> None:
+    def header(self, title: str, *, clear_screen: bool = True) -> None:
+        if clear_screen:
+            self.clear()
         print()
         print(self.style(f"━━━  {title}  ━━━", foreground=117, bold=True))
         print()
@@ -393,8 +399,7 @@ class App:
         )
 
     def clear(self) -> None:
-        if sys.stdout.isatty() and os.environ.get("TERM"):
-            run(["clear"], capture=False, check=False)
+        self.gum.clear()
 
     def gh_json(self, args: Sequence[str]) -> object:
         proc = run(["gh", *args])
@@ -406,7 +411,7 @@ class App:
 
     def preflight(self) -> None:
         self.gum.ensure_available()
-        self.gum.header("Preflight Checks")
+        self.gum.header("Preflight Checks", clear_screen=False)
         self.gum.hint("Checking required tools and the runtime environment...")
         print()
 
