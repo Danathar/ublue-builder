@@ -10,6 +10,7 @@ from ublue_builder import (
     App,
     BASE_IMAGES,
     BLUEBUILD_TEMPLATE_DIR,
+    COMMON_SERVICES,
     CommandError,
     CONTAINERFILE_TEMPLATE_DIR,
     Config,
@@ -225,6 +226,27 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("tmux", app.config.packages)
         self.assertIn("ripgrep", app.config.packages)
         self.assertIn("git", app.config.packages)
+
+    def test_select_common_services_replaces_curated_selection_only(self) -> None:
+        app = self.make_app()
+        app.config.services = ["custom.service", COMMON_SERVICES[0][1]]
+
+        class GumStub:
+            def header(self, _title: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def choose(self, _options, **_kwargs):
+                return [f"{COMMON_SERVICES[1][0]} ({COMMON_SERVICES[1][1]})"]
+
+            def success(self, _message: str) -> None:
+                pass
+
+        app.gum = GumStub()
+        app.select_common_services()
+        self.assertEqual(app.config.services, ["custom.service", COMMON_SERVICES[1][1]])
 
     def test_do_build_validates_before_creating_repo(self) -> None:
         app = self.make_app()

@@ -69,6 +69,12 @@ CATALOGS: dict[str, list[str]] = {
     "Security": "keepassxc age gnupg2 openssh-clients openssh-server".split(),
 }
 
+COMMON_SERVICES: tuple[tuple[str, str], ...] = (
+    ("SSH remote access", "sshd.service"),
+    ("Tailscale VPN", "tailscaled.service"),
+    ("Cockpit web admin", "cockpit.socket"),
+)
+
 
 @dataclass
 class Config:
@@ -854,8 +860,10 @@ class App:
         self.add_packages_to_config((token.strip(",") for token in raw.split()), source_label="manual entry")
 
     def add_copr(self) -> None:
-        print()
-        self.gum.hint("Leave the COPR repo field empty if you want to go back.")
+        self.gum.header("Add COPR Repository")
+        self.gum.hint("COPR is an extra community package source outside the normal Fedora and Universal Blue repos.")
+        self.gum.hint("Most users can skip this. Only use it if you know a package you need comes from that COPR.")
+        self.gum.hint("Example: kwizart/fedy. Leave the repo field empty if you want to go back.")
         print()
         repo = self.gum.input(prompt="COPR repo: ", placeholder="owner/project", width=50)
         repo = repo.strip()
@@ -865,6 +873,8 @@ class App:
             self.gum.error("Enter the COPR repo as owner/project.")
             return
         proposed_copr_repos = unique([*self.config.copr_repos, repo])
+        print()
+        self.gum.hint("Enter the package names you want from this COPR. Leave it empty if you only want to add the repo.")
         pkgs = self.gum.input(prompt="Packages: ", placeholder="package1 package2", width=60)
         packages = [pkg.strip(",") for pkg in pkgs.split()]
         if packages and not self.add_packages_to_config(packages, source_label=f"COPR {repo}"):
@@ -875,8 +885,59 @@ class App:
         self.gum.hint("The GitHub build will confirm that the COPR repo and package names are valid.")
 
     def add_services(self) -> None:
+        while True:
+            self.gum.header("Enable Services")
+            self.gum.hint("Services are background features that start automatically when the image boots.")
+            self.gum.hint("Most users can skip this unless they know they want something like SSH or Tailscale always on.")
+            self.gum.hint("Choose a common service, type another one manually, or go back.")
+            print()
+            try:
+                choice = self.gum.choose(
+                    [
+                        "Choose from common services",
+                        "Type service names manually (advanced)",
+                        "Back",
+                    ],
+                    height=6,
+                )
+            except ScreenBack:
+                return
+            selected = choice[0] if choice else "Back"
+            if selected == "Back":
+                return
+            if selected.startswith("Choose from common services"):
+                self.select_common_services()
+            elif selected.startswith("Type service names manually"):
+                self.add_services_manually()
+
+    def select_common_services(self) -> None:
+        self.gum.header("Common Services")
+        self.gum.hint("Use the arrow keys to move. Press x to select or deselect services to enable at boot.")
+        self.gum.hint("Press Enter when you are finished, or Esc to go back.")
         print()
-        self.gum.hint("Enter one service per line. Leave this empty if you want to go back.")
+        label_to_service = {f"{label} ({service})": service for label, service in COMMON_SERVICES}
+        options = list(label_to_service)
+        selected = [label for label, service in label_to_service.items() if service in self.config.services]
+        try:
+            picked = self.gum.choose(
+                options,
+                height=10,
+                no_limit=True,
+                selected=selected,
+                selected_prefix="[x] ",
+                unselected_prefix="[ ] ",
+            )
+        except ScreenBack:
+            return
+        remaining = [service for service in self.config.services if service not in label_to_service.values()]
+        chosen_services = [label_to_service[label] for label in picked]
+        self.config.services = unique([*remaining, *chosen_services])
+        self.gum.success(f"Total services configured: {len(self.config.services)}")
+
+    def add_services_manually(self) -> None:
+        print()
+        self.gum.hint("Type systemd service names like sshd.service or tailscaled.service.")
+        self.gum.hint("Leave this empty if you want to go back without adding anything.")
         raw = self.gum.write(placeholder="Enter service names, one per line...", height=5, width=50)
         self.config.services.extend(line.strip() for line in raw.splitlines())
         self.config.normalize()
