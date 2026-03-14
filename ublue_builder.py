@@ -1705,6 +1705,8 @@ class App:
         print()
         if self.gum.confirm("View full diff?", default=False):
             full_diff = run(["git", "diff"], cwd=repo_dir, check=False).stdout
+            self.gum.hint("The full diff will open in a pager. Press q there to close it and return here.")
+            print()
             self.gum.pager(full_diff)
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
