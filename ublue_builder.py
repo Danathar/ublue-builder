@@ -989,9 +989,16 @@ class App:
         repos = tuple(sorted(unique(copr_repos if copr_repos is not None else self.config.copr_repos)))
         return self.config.base_image_uri, repos
 
+    def base_image_is_cached(self) -> bool:
+        if not self.config.base_image_uri or not command_exists("podman"):
+            return False
+        return run(["podman", "image", "exists", self.config.base_image_uri], check=False).returncode == 0
+
     def package_check_title(self) -> str:
         target = self.config.base_image_name or self.config.base_image_uri or "the selected image"
-        return f"Checking package names for {target}..."
+        if self.base_image_is_cached():
+            return f"Checking package names for {target}..."
+        return f"Checking package names for {target}... First check may take a minute while the image downloads."
 
     def query_available_packages_in_image(
         self,

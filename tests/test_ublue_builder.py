@@ -229,6 +229,12 @@ class BuilderTests(unittest.TestCase):
         self.assertIsNotNone(app.last_command)
         self.assertIn("%{name}\\n", app.last_command[-1])
 
+    def test_package_check_title_mentions_download_when_image_is_missing(self) -> None:
+        app = self.make_app()
+        with patch.object(app, "base_image_is_cached", return_value=False):
+            title = app.package_check_title()
+        self.assertIn("First check may take a minute", title)
+
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / ".template-source").is_file())
