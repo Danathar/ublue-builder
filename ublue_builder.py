@@ -908,16 +908,23 @@ class App:
         print()
         self.gum.enter_to_continue("Press Enter to go back to the software menu...")
 
-    def show_summary(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+    def show_summary(
+        self,
+        *,
+        step: int | None = None,
+        total_steps: int | None = None,
+        next_hint: str | None = None,
+    ) -> None:
         if step is not None and total_steps is not None:
             self.show_step_header(
                 "Review Build Configuration",
                 step=step,
                 total_steps=total_steps,
-                next_hint="Press Enter to continue. Esc goes back. Ctrl+C quits.",
+                next_hint=next_hint or "Press Enter to continue. Esc goes back. Ctrl+C quits.",
             )
         else:
             self.gum.header("Review Build Configuration")
+            self.gum.hint(next_hint or "Press Enter to continue. Esc goes back. Ctrl+C quits.")
         self.gum.hint("This is a read-only summary of the current settings.")
         print()
         rows = [
@@ -1539,8 +1546,11 @@ class App:
             if selected == cancel_label:
                 return False
             if selected == review_label:
-                self.show_summary()
-                self.gum.enter_to_continue("Press Enter to go back to the update menu...")
+                self.show_summary(next_hint="Press Enter to continue. Esc goes back. Ctrl+C quits.")
+                try:
+                    self.gum.enter_to_continue("Press Enter to go back to the update menu...")
+                except ScreenBack:
+                    continue
                 continue
             task = mapping[selected]
             try:
