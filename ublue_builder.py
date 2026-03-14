@@ -1103,6 +1103,8 @@ class App:
         owner = self.github_user
         repo = self.config.repo_name
         self.config.github_user = owner
+        self.validate_config()
+        self.validate_package_availability()
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
         if exists:
@@ -1131,12 +1133,15 @@ class App:
 
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
         summary_lines = [
-            "Build Complete",
+            "Repository Created",
             "",
             f"Repository: https://github.com/{owner}/{repo}",
             f"Image:      {image_uri}",
             "",
-            f"Switch to your image: sudo bootc switch {image_uri}",
+            "GitHub Actions is building your image now.",
+            "After the first build finishes, switch with:",
+            f"sudo bootc switch {image_uri}",
+            f"Track the build: https://github.com/{owner}/{repo}/actions",
         ]
         print(
             self.gum.style(

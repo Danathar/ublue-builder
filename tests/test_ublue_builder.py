@@ -192,6 +192,17 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "ripgrep"):
             app.validate_package_availability()
 
+    def test_do_build_validates_before_creating_repo(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+        with patch.object(app, "validate_package_availability", side_effect=CommandError("bad package")):
+            with patch("ublue_builder.run") as run_mock:
+                with self.assertRaisesRegex(CommandError, "bad package"):
+                    app.do_build()
+        run_mock.assert_not_called()
+
     def test_query_available_packages_in_image_uses_line_delimited_queryformat(self) -> None:
         class CaptureApp(App):
             def __init__(self) -> None:
