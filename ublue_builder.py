@@ -757,6 +757,9 @@ class App:
 
     def view_selections(self) -> None:
         self.gum.header("Current Selections")
+        self.gum.hint("This is a read-only summary.")
+        self.gum.hint("Press Enter to go back to the software menu.")
+        print()
         rows = [
             ("Packages", ", ".join(self.config.packages) or "(none)"),
             ("COPR Repos", ", ".join(self.config.copr_repos) or "(none)"),
@@ -766,7 +769,7 @@ class App:
         ]
         self.gum.table(rows, columns="Setting,Value", widths="20,60")
         print()
-        self.gum.enter_to_continue()
+        self.gum.enter_to_continue("Press Enter to go back to the software menu...")
 
     def show_summary(self) -> None:
         self.gum.header("Review Build Configuration")
@@ -1374,7 +1377,7 @@ class App:
                 self.manage_removed_packages()
             elif selected == "View current configuration":
                 self.show_summary()
-                self.gum.enter_to_continue()
+                self.gum.enter_to_continue("Press Enter to go back to the update menu...")
 
     def choose_to_remove(self, values: list[str], header: str) -> list[str]:
         if not values:
