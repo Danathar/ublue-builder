@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
-VERSION = "6.0"
+VERSION = "0.8 beta"
 STATE_FILE = ".ublue-builder.json"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
@@ -463,10 +463,10 @@ class App:
     def banner(self) -> None:
         print(
             self.gum.style(
-                f"Universal Blue Custom Image Builder  v{VERSION}",
+                f"GitHub Repo Creator for Universal Blue  v{VERSION}",
                 "",
-                "Build custom OCI images from Universal Blue base images.",
-                "Guided setup for beginner Bazzite, Aurora, and Bluefin users.",
+                "Create and update GitHub-backed Universal Blue image repositories.",
+                "Beta terminal tool for beginner Bazzite, Aurora, and Bluefin users.",
                 align="center",
                 width=self.gum.content_width(reserve=8),
                 margin="1 2",
@@ -487,7 +487,7 @@ class App:
                 "",
                 "gh auth login",
                 "",
-                "This tool stores your image config on GitHub and uses GitHub Actions to build it.",
+                "This tool stores your image repo on GitHub and uses GitHub Actions to build it.",
                 align="left",
                 width=self.gum.content_width(max_width=100, reserve=8),
                 margin="0 2",

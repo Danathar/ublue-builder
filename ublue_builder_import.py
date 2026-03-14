@@ -8,10 +8,10 @@ class LegacyImportApp(App):
     def banner(self) -> None:
         print(
             self.gum.style(
-                "Universal Blue Builder  Legacy Import",
+                "GitHub Repo Creator for Universal Blue  Legacy Import",
                 "",
                 "Adopt an existing image repo into this tool.",
-                "Advanced tool for older or manually created repos.",
+                "Advanced beta tool for older or manually created repos.",
                 align="center",
                 width=self.gum.content_width(reserve=8),
                 margin="1 2",
