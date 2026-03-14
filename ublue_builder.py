@@ -19,6 +19,7 @@ STATE_FILE = ".ublue-builder.json"
 SERVICE_NAME = "ublue-local-build"
 TIMER_DIR = Path.home() / ".config/systemd/user"
 DEFAULT_REPO_NAME = "my-ublue-image"
+DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 
 
 @dataclass(frozen=True)
@@ -238,6 +239,20 @@ class Gum:
     def spinner(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> None:
         run(["gum", "spin", "--spinner", "dot", "--title", title, "--", *command], cwd=cwd, capture=False)
 
+    def spinner_capture(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> str:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            output_path = tmp.name
+        try:
+            shell_command = f"{shlex.join(command)} > {shlex.quote(output_path)}"
+            run(
+                ["gum", "spin", "--spinner", "dot", "--title", title, "--", "bash", "-lc", shell_command],
+                cwd=cwd,
+                capture=False,
+            )
+            return Path(output_path).read_text()
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
     def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
         run(["gum", "input", "--placeholder", placeholder], check=False, capture=False)
 
@@ -274,6 +289,10 @@ class App:
     def gh_json(self, args: Sequence[str]) -> object:
         proc = run(["gh", *args])
         return json.loads(proc.stdout or "null")
+
+    def gh_json_with_spinner(self, title: str, args: Sequence[str]) -> object:
+        output = self.gum.spinner_capture(title, ["gh", *args])
+        return json.loads(output or "null")
 
     def preflight(self) -> None:
         self.gum.ensure_available()
@@ -829,7 +848,10 @@ class App:
     def select_repo(self) -> tuple[str, str]:
         if not self.require_github():
             raise SystemExit(1)
-        repos = self.gh_json(["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"])
+        repos = self.gh_json_with_spinner(
+            "Fetching repositories from GitHub...",
+            ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
+        )
         if not repos:
             raise SystemExit("No repositories found on your GitHub account.")
         labels: list[str] = []
@@ -1412,7 +1434,7 @@ class App:
             "on:",
             "  pull_request:",
             "  schedule:",
-            "    - cron: '05 10 * * *'",
+            f"    - cron: '{DEFAULT_GITHUB_BUILD_CRON}'",
             "  push:",
             f"    paths-ignore: ['**/README.md', '{STATE_FILE}']",
             "  workflow_dispatch:",
@@ -1554,7 +1576,7 @@ class App:
             "name: bluebuild",
             "on:",
             '  schedule:',
-            '    - cron: "00 06 * * *"',
+            f'    - cron: "{DEFAULT_GITHUB_BUILD_CRON}"',
             "  push:",
             f'    paths-ignore: ["**.md", "{STATE_FILE}"]',
             "  pull_request:",
