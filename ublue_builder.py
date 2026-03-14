@@ -463,7 +463,7 @@ class App:
     def banner(self) -> None:
         print(
             self.gum.style(
-                f"GitHub Repo Creator for Universal Blue  v{VERSION}",
+                f"uBlue Builder  v{VERSION}",
                 "",
                 "Create and update GitHub-backed Universal Blue image repositories.",
                 "Beta terminal tool for beginner Bazzite, Aurora, and Bluefin users.",

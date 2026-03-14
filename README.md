@@ -1,4 +1,4 @@
-# GitHub Repo Creator for Universal Blue
+# uBlue Builder
 
 Beta terminal tool for creating and updating GitHub-backed Universal Blue image repositories.
 
