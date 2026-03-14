@@ -275,6 +275,74 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.packages, ["tmux"])
         self.assertTrue(any(level == "warn" for level, _message in app.gum.messages))
 
+    def test_manual_packages_pauses_after_successful_add(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def write(self, **_kwargs) -> str:
+                return "tmux"
+
+            def form_width(self, **_kwargs) -> int:
+                return 80
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def error(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
+                self.prompts.append(placeholder)
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", return_value=True):
+            app.manual_packages()
+        self.assertEqual(app.config.packages, ["tmux"])
+        self.assertEqual(app.gum.prompts, ["Added 1 package(s). Press Enter to return to the package menu..."])
+
+    def test_manual_packages_pauses_after_failed_add(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def write(self, **_kwargs) -> str:
+                return "nethock"
+
+            def form_width(self, **_kwargs) -> int:
+                return 80
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def error(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
+                self.prompts.append(placeholder)
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", return_value=False):
+            app.manual_packages()
+        self.assertEqual(app.config.packages, [])
+        self.assertEqual(app.gum.prompts, ["No packages were added. Press Enter to return to the package menu..."])
+
     def test_browse_catalog_group_applies_selected_packages(self) -> None:
         app = self.make_app()
         app.config.packages = ["git"]

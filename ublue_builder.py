@@ -413,6 +413,32 @@ class Gum:
         finally:
             Path(output_path).unlink(missing_ok=True)
 
+    def spinner_result(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        with tempfile.NamedTemporaryFile(delete=False) as stdout_tmp:
+            stdout_path = stdout_tmp.name
+        with tempfile.NamedTemporaryFile(delete=False) as stderr_tmp:
+            stderr_path = stderr_tmp.name
+        with tempfile.NamedTemporaryFile(delete=False) as status_tmp:
+            status_path = status_tmp.name
+        try:
+            shell_command = (
+                f"{shlex.join(command)} > {shlex.quote(stdout_path)} 2> {shlex.quote(stderr_path)}; "
+                f"printf '%s' $? > {shlex.quote(status_path)}"
+            )
+            run(
+                ["gum", "spin", "--spinner", "dot", "--title", title, "--", "bash", "-lc", shell_command],
+                cwd=cwd,
+                capture=False,
+            )
+            stdout = Path(stdout_path).read_text()
+            stderr = Path(stderr_path).read_text()
+            status_text = Path(status_path).read_text().strip()
+            return subprocess.CompletedProcess(list(command), int(status_text or "0"), stdout, stderr)
+        finally:
+            Path(stdout_path).unlink(missing_ok=True)
+            Path(stderr_path).unlink(missing_ok=True)
+            Path(status_path).unlink(missing_ok=True)
+
     def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
         self.require_interactive_success(self.interactive_stdout(["gum", "input", "--no-show-help", "--placeholder", placeholder]))
 
@@ -427,6 +453,7 @@ class App:
         self.generated_cosign_pub: str | None = None
         self.package_lookup_cache: dict[str, bool | None] = {}
         self.package_lookup_warning_shown = False
+        self.last_manual_package_check_had_missing = False
 
     def banner(self) -> None:
         print(
@@ -883,7 +910,19 @@ class App:
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
         print()
         raw = self.gum.write(placeholder="Enter package names...", height=6, width=self.gum.form_width(max_width=110))
-        self.add_packages_to_config((token.strip(",") for token in raw.split()), source_label="manual entry")
+        packages = [token.strip(",") for token in raw.split() if token.strip(",")]
+        if not packages:
+            return
+        before_count = len(self.config.packages)
+        added = self.add_packages_to_config(packages, source_label="manual entry")
+        added_count = len(self.config.packages) - before_count
+        if added and not self.last_manual_package_check_had_missing:
+            self.gum.enter_to_continue(f"Added {added_count} package(s). Press Enter to return to the package menu...")
+            return
+        if added and self.last_manual_package_check_had_missing:
+            self.gum.enter_to_continue("Finished checking package names. Press Enter to return to the package menu...")
+            return
+        self.gum.enter_to_continue("No packages were added. Press Enter to return to the package menu...")
 
     def add_copr(self) -> None:
         self.gum.header("Add COPR Repository")
@@ -1322,6 +1361,7 @@ class App:
         return True
 
     def filter_available_manual_packages(self, packages: Sequence[str]) -> list[str]:
+        self.last_manual_package_check_had_missing = False
         accepted: list[str] = []
         missing: list[str] = []
         unchecked: list[str] = []
@@ -1335,6 +1375,7 @@ class App:
                 accepted.append(package)
                 unchecked.append(package)
         if missing:
+            self.last_manual_package_check_had_missing = True
             joined = ", ".join(missing)
             self.gum.error(f"These package names were not found: {joined}")
             self.gum.hint("They were skipped because no RPM package with that name was found.")
@@ -1354,11 +1395,12 @@ class App:
             return None
         state_dir = Path(tempfile.gettempdir()) / "ublue-builder-dnf5"
         state_dir.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
-        env["XDG_STATE_HOME"] = str(state_dir)
-        env["XDG_CACHE_HOME"] = str(state_dir)
-        proc = run(
+        proc = self.gum.spinner_result(
+            f"Checking package name: {package}",
             [
+                "env",
+                f"XDG_STATE_HOME={state_dir}",
+                f"XDG_CACHE_HOME={state_dir}",
                 "dnf5",
                 "repoquery",
                 "--available",
@@ -1368,8 +1410,6 @@ class App:
                 "1",
                 package,
             ],
-            env=env,
-            check=False,
         )
         names = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
         if package in names:
