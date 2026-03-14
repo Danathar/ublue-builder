@@ -339,6 +339,9 @@ class Gum:
         no_limit: bool = False,
         selected: Sequence[str] | None = None,
         header: str | None = None,
+        cursor_prefix: str | None = None,
+        selected_prefix: str | None = None,
+        unselected_prefix: str | None = None,
     ) -> list[str]:
         args = ["gum", "choose", "--show-help", "--height", str(height)]
         if no_limit:
@@ -347,6 +350,12 @@ class Gum:
             args.extend(["--selected", ",".join(selected)])
         if header:
             args.extend(["--header", header])
+        if cursor_prefix is not None:
+            args.extend(["--cursor-prefix", cursor_prefix])
+        if selected_prefix is not None:
+            args.extend(["--selected-prefix", selected_prefix])
+        if unselected_prefix is not None:
+            args.extend(["--unselected-prefix", unselected_prefix])
         proc = self.require_interactive_success(self.interactive_stdout(args, stdin="\n".join(options) + "\n"))
         output = proc.stdout.strip("\n")
         return [line for line in output.splitlines() if line]
@@ -810,35 +819,28 @@ class App:
                 return
 
     def browse_catalog_group(self, group: str) -> bool:
-        while True:
-            self.gum.header(f"{group} Packages")
-            self.gum.hint("Choose a package to add or remove it.")
-            self.gum.hint("Choose Done when you are finished, or Back to return to the package groups.")
-            print()
-            labels: dict[str, str] = {}
-            options: list[str] = []
-            current = set(self.config.packages)
-            for package in CATALOGS[group]:
-                marker = "[x]" if package in current else "[ ]"
-                label = f"{marker} {package}"
-                labels[label] = package
-                options.append(label)
-            options.extend(["Done", "Back"])
-            try:
-                choice = self.gum.choose(options, height=20)
-            except ScreenBack:
-                return False
-            selected = choice[0] if choice else "Back"
-            if selected == "Done":
-                return True
-            if selected == "Back":
-                return False
-            package = labels[selected]
-            if package in current:
-                self.config.packages = [item for item in self.config.packages if item != package]
-                self.config.normalize()
-            else:
-                self.add_packages_to_config([package], source_label=group)
+        self.gum.header(f"{group} Packages")
+        self.gum.hint("Press x to add or remove packages.")
+        self.gum.hint("Press Enter when you are finished. Press Esc to go back to the package groups.")
+        print()
+        current = [pkg for pkg in CATALOGS[group] if pkg in set(self.config.packages)]
+        try:
+            picked = self.gum.choose(
+                CATALOGS[group],
+                height=20,
+                no_limit=True,
+                selected=current,
+                header=group,
+                cursor_prefix="> ",
+                selected_prefix="[x] ",
+                unselected_prefix="[ ] ",
+            )
+        except ScreenBack:
+            return False
+        remaining = [pkg for pkg in self.config.packages if pkg not in CATALOGS[group]]
+        self.config.packages = unique([*remaining, *picked])
+        self.gum.success(f"Selected {len(picked)} package(s) from {group}.")
+        return True
 
     def manual_packages(self) -> None:
         print()
