@@ -16,8 +16,6 @@ from typing import Iterable, Sequence
 
 VERSION = "6.0"
 STATE_FILE = ".ublue-builder.json"
-SERVICE_NAME = "ublue-local-build"
-TIMER_DIR = Path.home() / ".config/systemd/user"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
@@ -421,9 +419,9 @@ class App:
         self.gum.success("git found")
 
         if command_exists("podman"):
-            self.gum.success("podman found (local builds available)")
+            self.gum.success("podman found (package checks available)")
         else:
-            self.gum.warn("podman not found (local builds unavailable)")
+            self.gum.warn("podman not found (package checks will be limited)")
 
         if command_exists("gh"):
             if run(["gh", "auth", "status"], check=False).returncode == 0:
@@ -1506,194 +1504,6 @@ class App:
         run(["git", "add", "-A"], cwd=repo_dir)
         run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir, check=False)
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
-    def local_build_image(self) -> None:
-        self.gum.header("Build Image Locally")
-        if not command_exists("podman"):
-            self.gum.error("Podman is required for local builds. Install it with: brew install podman")
-            return
-        bootc_available = command_exists("bootc")
-
-        choice = self.gum.choose(
-            [
-                "Use an existing local project directory",
-                "Clone a GitHub repository to build locally",
-                "Create a new image config to build locally",
-                "Back",
-            ],
-            height=5,
-        )
-        selected = choice[0] if choice else "Back"
-        local_dir: Path | None = None
-        if selected == "Use an existing local project directory":
-            path = self.gum.input(prompt="Path to project: ", placeholder=str(Path.home() / "my-ublue-image"), width=60)
-            local_dir = Path(path).expanduser()
-            if not local_dir.is_dir():
-                self.gum.error(f"Directory not found: {local_dir}")
-                return
-        elif selected == "Clone a GitHub repository to build locally":
-            owner, repo = self.select_repo()
-            local_dir = Path.home() / repo
-            if local_dir.exists():
-                if not (local_dir / ".git").is_dir():
-                    raise CommandError(f"{local_dir} already exists but is not a git repository.")
-                branch = self.current_branch(local_dir)
-                run(["git", "pull", "origin", branch], cwd=local_dir, check=False, capture=False)
-            else:
-                self.clone_repo(owner, repo, local_dir)
-        elif selected == "Create a new image config to build locally":
-            self.config = Config()
-            self.choose_method()
-            self.choose_base_image()
-            self.config.repo_name = sanitize_slug(
-                self.gum.input(prompt="Project name: ", value=DEFAULT_REPO_NAME, placeholder=DEFAULT_REPO_NAME, width=60)
-            )
-            self.config.image_desc = self.gum.input(
-                prompt="Description: ",
-                value=self.config.image_desc,
-                placeholder="Description",
-                width=80,
-            ) or self.config.image_desc
-            self.select_packages()
-            self.show_summary()
-            local_dir = Path.home() / self.config.repo_name
-            if self.config.method == "containerfile":
-                self.clone_container_template(local_dir)
-            elif self.config.method == "bluebuild":
-                self.clone_bluebuild_template(local_dir)
-            else:
-                local_dir.mkdir(parents=True, exist_ok=True)
-            self.write_project_files(local_dir, include_workflow=False)
-        else:
-            return
-
-        assert local_dir is not None
-        containerfile = local_dir / "Containerfile"
-        if not containerfile.exists():
-            containerfile = local_dir / "Dockerfile"
-        if not containerfile.exists():
-            recipe = local_dir / "recipes/recipe.yml"
-            if recipe.exists():
-                self.gum.error("BlueBuild local builds need the bluebuild CLI. This tool currently only automates local Containerfile builds.")
-            else:
-                self.gum.error(f"No Containerfile found in {local_dir}")
-            return
-
-        image_name = sanitize_slug(local_dir.name, local_dir.name)
-        print()
-        print(self.gum.style("Building... (this may take a while)", foreground=117, bold=True))
-        print()
-        proc = run(
-            ["podman", "build", "--pull=newer", "--tag", f"localhost/{image_name}:latest", "-f", str(containerfile), str(local_dir)],
-            check=False,
-            capture=False,
-        )
-        if proc.returncode != 0:
-            self.gum.error("Build failed.")
-            return
-        self.gum.success(f"Built localhost/{image_name}:latest")
-        if not bootc_available:
-            print()
-            self.gum.warn("bootc is not installed on this host. Install/stage actions are unavailable.")
-            return
-
-        action = self.gum.choose(
-            [
-                "Install now (bootc switch + reboot)",
-                "Stage for next boot (bootc switch, reboot later)",
-                "Skip",
-            ],
-            height=5,
-        )
-        selected = action[0] if action else "Skip"
-        if selected.startswith("Install now"):
-            run(["sudo", "bootc", "switch", "--transport", "containers-storage", f"localhost/{image_name}:latest"], capture=False)
-            run(["sudo", "systemctl", "reboot"], check=False, capture=False)
-        elif selected.startswith("Stage for next boot"):
-            run(["sudo", "bootc", "switch", "--transport", "containers-storage", f"localhost/{image_name}:latest"], capture=False)
-
-    def systemd_shell_command(self, script: str) -> str:
-        return f"/bin/bash -lc {shlex.quote(script)}"
-
-    def setup_nightly_build(self) -> None:
-        self.gum.header("Nightly Local Build")
-        if not command_exists("podman"):
-            self.gum.error("Podman is required for nightly builds.")
-            return
-        bootc_available = command_exists("bootc")
-        project_dir = Path(
-            self.gum.input(prompt="Project directory: ", placeholder=str(Path.home() / "my-ublue-image"), width=60)
-        ).expanduser()
-        if not project_dir.is_dir():
-            self.gum.error(f"Directory not found: {project_dir}")
-            return
-        containerfile = project_dir / "Containerfile"
-        if not containerfile.exists():
-            containerfile = project_dir / "Dockerfile"
-        if not containerfile.exists():
-            self.gum.error("Nightly builds currently require a Containerfile or Dockerfile project.")
-            return
-
-        hour = self.gum.input(prompt="Build hour (0-23): ", value="3", width=30) or "3"
-        if not hour.isdigit() or int(hour) > 23:
-            hour = "3"
-        auto_stage = False
-        if bootc_available:
-            auto_stage = self.gum.confirm("Automatically stage the image for next boot after building?", default=True)
-        else:
-            self.gum.warn("bootc is not installed on this host. Nightly builds can rebuild locally, but they cannot stage the image.")
-        auto_pull = (project_dir / ".git").is_dir() and self.gum.confirm("Pull latest git changes before each build?", default=True)
-        image_name = sanitize_slug(project_dir.name, project_dir.name)
-
-        TIMER_DIR.mkdir(parents=True, exist_ok=True)
-        service_path = TIMER_DIR / f"{SERVICE_NAME}.service"
-        timer_path = TIMER_DIR / f"{SERVICE_NAME}.timer"
-
-        build_script = []
-        if auto_pull:
-            build_script.append(f"git -C {shlex.quote(str(project_dir))} pull origin $(git -C {shlex.quote(str(project_dir))} branch --show-current)")
-        build_script.append(
-            f"podman build --pull=newer --tag localhost/{image_name}:latest -f {shlex.quote(str(containerfile))} {shlex.quote(str(project_dir))}"
-        )
-        if auto_stage:
-            build_script.append(
-                f"sudo -n /usr/bin/bootc switch --transport containers-storage localhost/{image_name}:latest"
-            )
-        service_body = textwrap.dedent(
-            f"""\
-            [Unit]
-            Description=Universal Blue Local Image Builder
-            Wants=network-online.target
-            After=network-online.target
-
-            [Service]
-            Type=oneshot
-            ExecStart={self.systemd_shell_command(' && '.join(build_script))}
-
-            [Install]
-            WantedBy=default.target
-            """
-        )
-        timer_body = textwrap.dedent(
-            f"""\
-            [Unit]
-            Description=Nightly Universal Blue image build
-
-            [Timer]
-            OnCalendar=*-*-* {hour}:00:00
-            Persistent=true
-            RandomizedDelaySec=900
-
-            [Install]
-            WantedBy=timers.target
-            """
-        )
-        service_path.write_text(service_body)
-        timer_path.write_text(timer_body)
-        run(["systemctl", "--user", "daemon-reload"], capture=False)
-        run(["systemctl", "--user", "enable", "--now", f"{SERVICE_NAME}.timer"], capture=False)
-        if auto_stage:
-            self.gum.warn("Auto-stage uses 'sudo -n'; configure passwordless sudo for /usr/bin/bootc or the stage step will fail.")
-        self.gum.success("Nightly build timer created.")
 
     def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
         invalid = [value for value in values if not pattern.fullmatch(value)]
