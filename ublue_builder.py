@@ -914,7 +914,7 @@ class App:
                 "Review Build Configuration",
                 step=step,
                 total_steps=total_steps,
-                next_hint="Press Enter to continue to the next screen. Esc goes back to the previous step.",
+                next_hint="Press Enter to continue. Esc goes back. Ctrl+C quits.",
             )
         else:
             self.gum.header("Review Build Configuration")
