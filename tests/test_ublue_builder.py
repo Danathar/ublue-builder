@@ -169,7 +169,8 @@ class BuilderTests(unittest.TestCase):
                 self.messages.append(("error", message))
 
         app.gum = GumStub()
-        added = app.add_packages_to_config(["tmux", "ripgrep"], source_label="manual entry")
+        with patch.object(app, "lookup_host_package", side_effect=[True, True]):
+            added = app.add_packages_to_config(["tmux", "ripgrep"], source_label="manual entry")
         self.assertTrue(added)
         self.assertEqual(app.config.packages, ["tmux", "ripgrep"])
         self.assertTrue(any(level == "success" for level, _message in app.gum.messages))
@@ -195,6 +196,84 @@ class BuilderTests(unittest.TestCase):
         self.assertFalse(added)
         self.assertEqual(app.config.packages, [])
         self.assertTrue(any(level == "error" and "Invalid package value" in message for level, message in app.gum.messages))
+
+    def test_add_packages_to_config_rejects_missing_manual_packages(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def success(self, message: str) -> None:
+                self.messages.append(("success", message))
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def error(self, message: str) -> None:
+                self.messages.append(("error", message))
+
+            def hint(self, message: str) -> None:
+                self.messages.append(("hint", message))
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", return_value=False):
+            added = app.add_packages_to_config(["nethock"], source_label="manual entry")
+        self.assertFalse(added)
+        self.assertEqual(app.config.packages, [])
+        self.assertTrue(any(level == "error" and "not found" in message for level, message in app.gum.messages))
+
+    def test_add_packages_to_config_keeps_checked_manual_packages_only(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def success(self, message: str) -> None:
+                self.messages.append(("success", message))
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def error(self, message: str) -> None:
+                self.messages.append(("error", message))
+
+            def hint(self, message: str) -> None:
+                self.messages.append(("hint", message))
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", side_effect=[True, False]):
+            added = app.add_packages_to_config(["tmux", "nethock"], source_label="manual entry")
+        self.assertTrue(added)
+        self.assertEqual(app.config.packages, ["tmux"])
+        self.assertTrue(any(level == "error" and "nethock" in message for level, message in app.gum.messages))
+
+    def test_add_packages_to_config_warns_when_manual_check_is_unavailable(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def success(self, message: str) -> None:
+                self.messages.append(("success", message))
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def error(self, message: str) -> None:
+                self.messages.append(("error", message))
+
+            def hint(self, message: str) -> None:
+                self.messages.append(("hint", message))
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", return_value=None):
+            added = app.add_packages_to_config(["tmux"], source_label="manual entry")
+        self.assertTrue(added)
+        self.assertEqual(app.config.packages, ["tmux"])
+        self.assertTrue(any(level == "warn" for level, _message in app.gum.messages))
 
     def test_browse_catalog_group_applies_selected_packages(self) -> None:
         app = self.make_app()

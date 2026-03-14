@@ -425,6 +425,8 @@ class App:
         self.github_user = ""
         self.used_legacy_import = False
         self.generated_cosign_pub: str | None = None
+        self.package_lookup_cache: dict[str, bool | None] = {}
+        self.package_lookup_warning_shown = False
 
     def banner(self) -> None:
         print(
@@ -513,6 +515,11 @@ class App:
             self.gum.success("cosign found (image signing available)")
         else:
             self.gum.warn("cosign not found (signed builds will be skipped)")
+
+        if command_exists("dnf5"):
+            self.gum.success("dnf5 found (manual package checks available)")
+        else:
+            self.gum.warn("dnf5 not found (manual package names will be checked during the GitHub build)")
 
         if command_exists("rpm-ostree"):
             self.gum.success("rpm-ostree found (OS scan available)")
@@ -871,7 +878,8 @@ class App:
     def manual_packages(self) -> None:
         print()
         self.gum.hint("Enter RPM package names separated by spaces or newlines.")
-        self.gum.hint("The GitHub build will do the final check that each package name exists.")
+        self.gum.hint("This tool will try to catch obvious package-name mistakes here first.")
+        self.gum.hint("The GitHub build is still the final check.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
         print()
         raw = self.gum.write(placeholder="Enter package names...", height=6, width=self.gum.form_width(max_width=110))
@@ -1304,10 +1312,85 @@ class App:
         except CommandError as exc:
             self.gum.error(str(exc))
             return False
+        if source_label == "manual entry":
+            packages = self.filter_available_manual_packages(packages)
+            if not packages:
+                return False
         self.config.packages.extend(packages)
         self.config.normalize()
         self.gum.success(f"Added {len(packages)} package(s) from {source_label}")
         return True
+
+    def filter_available_manual_packages(self, packages: Sequence[str]) -> list[str]:
+        accepted: list[str] = []
+        missing: list[str] = []
+        unchecked: list[str] = []
+        for package in packages:
+            available = self.lookup_host_package(package)
+            if available is True:
+                accepted.append(package)
+            elif available is False:
+                missing.append(package)
+            else:
+                accepted.append(package)
+                unchecked.append(package)
+        if missing:
+            joined = ", ".join(missing)
+            self.gum.error(f"These package names were not found: {joined}")
+            self.gum.hint("They were skipped because no RPM package with that name was found.")
+        if unchecked and not self.package_lookup_warning_shown:
+            joined = ", ".join(unchecked)
+            self.gum.warn("Could not fully check some package names on this system.")
+            self.gum.hint(f"Keeping for now: {joined}")
+            self.gum.hint("The GitHub build will do the final package check.")
+            self.package_lookup_warning_shown = True
+        return accepted
+
+    def lookup_host_package(self, package: str) -> bool | None:
+        if package in self.package_lookup_cache:
+            return self.package_lookup_cache[package]
+        if not command_exists("dnf5"):
+            self.package_lookup_cache[package] = None
+            return None
+        state_dir = Path(tempfile.gettempdir()) / "ublue-builder-dnf5"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env["XDG_STATE_HOME"] = str(state_dir)
+        env["XDG_CACHE_HOME"] = str(state_dir)
+        proc = run(
+            [
+                "dnf5",
+                "repoquery",
+                "--available",
+                "--qf",
+                "%{name}",
+                "--latest-limit",
+                "1",
+                package,
+            ],
+            env=env,
+            check=False,
+        )
+        names = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+        if package in names:
+            self.package_lookup_cache[package] = True
+            return True
+        detail = "\n".join(part for part in [proc.stdout, proc.stderr] if part).lower()
+        missing_markers = (
+            "no matches found",
+            "no package matched",
+            "no packages to list",
+            "matched no packages",
+            "no matching packages",
+        )
+        if any(marker in detail for marker in missing_markers):
+            self.package_lookup_cache[package] = False
+            return False
+        if proc.returncode == 0 and not names:
+            self.package_lookup_cache[package] = False
+            return False
+        self.package_lookup_cache[package] = None
+        return None
 
     def do_build(self) -> bool:
         if not self.require_github():
