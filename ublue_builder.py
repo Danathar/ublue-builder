@@ -1541,10 +1541,6 @@ class App:
                 if self.config.signing_enabled:
                     output.append(line)
                 continue
-            if stripped == "- recipe.yml":
-                indent = line[: len(line) - len(line.lstrip())]
-                output.append(f"{indent}- recipes/recipe.yml")
-                continue
             output.append(line)
         if self.config.signing_enabled and not cosign_line_present:
             updated_output: list[str] = []
