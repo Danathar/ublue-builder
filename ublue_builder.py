@@ -379,7 +379,6 @@ class App:
         self.github_user = ""
         self.used_legacy_import = False
         self.generated_cosign_pub: str | None = None
-        self.package_availability_cache: dict[tuple[str, tuple[str, ...], str], bool] = {}
 
     def banner(self) -> None:
         print(
@@ -410,12 +409,6 @@ class App:
         output = self.gum.spinner_capture(title, ["gh", *args])
         return json.loads(output or "null")
 
-    def capture_command_output(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> str:
-        spinner_capture = getattr(self.gum, "spinner_capture", None)
-        if callable(spinner_capture):
-            return spinner_capture(title, command, cwd=cwd)
-        return run(command, cwd=cwd).stdout
-
     def preflight(self) -> None:
         self.gum.ensure_available()
         self.gum.header("Preflight Checks")
@@ -425,11 +418,6 @@ class App:
         if not command_exists("git"):
             raise SystemExit("git is required. Install it with: brew install git")
         self.gum.success("git found")
-
-        if command_exists("podman"):
-            self.gum.success("podman found (package checks available)")
-        else:
-            self.gum.warn("podman not found (package checks will be limited)")
 
         if command_exists("gh"):
             if run(["gh", "auth", "status"], check=False).returncode == 0:
@@ -705,6 +693,7 @@ class App:
     def manual_packages(self) -> None:
         print()
         self.gum.hint("Enter RPM package names separated by spaces or newlines.")
+        self.gum.hint("The GitHub build will do the final check that each package name exists.")
         print()
         raw = self.gum.write(placeholder="Enter package names...", height=6, width=70)
         self.add_packages_to_config((token.strip(",") for token in raw.split()), source_label="manual entry")
@@ -719,18 +708,14 @@ class App:
             self.gum.error("Enter the COPR repo as owner/project.")
             return
         proposed_copr_repos = unique([*self.config.copr_repos, repo])
-        try:
-            self.verify_copr_repositories(proposed_copr_repos)
-        except CommandError as exc:
-            self.gum.error(str(exc))
-            return
         pkgs = self.gum.input(prompt="Packages: ", placeholder="package1 package2", width=60)
         packages = [pkg.strip(",") for pkg in pkgs.split()]
-        if packages and not self.add_packages_to_config(packages, source_label=f"COPR {repo}", copr_repos=proposed_copr_repos):
+        if packages and not self.add_packages_to_config(packages, source_label=f"COPR {repo}"):
             return
         self.config.copr_repos = proposed_copr_repos
         self.config.normalize()
         self.gum.success(f"Added COPR: {repo}")
+        self.gum.hint("The GitHub build will confirm that the COPR repo and package names are valid.")
 
     def add_services(self) -> None:
         print()
@@ -985,139 +970,24 @@ class App:
             return
         raise CommandError(f"Unsupported build method: {self.config.method}")
 
-    def package_check_context(self, *, copr_repos: Sequence[str] | None = None) -> tuple[str, tuple[str, ...]]:
-        repos = tuple(sorted(unique(copr_repos if copr_repos is not None else self.config.copr_repos)))
-        return self.config.base_image_uri, repos
-
-    def base_image_is_cached(self) -> bool:
-        if not self.config.base_image_uri or not command_exists("podman"):
-            return False
-        return run(["podman", "image", "exists", self.config.base_image_uri], check=False).returncode == 0
-
-    def package_check_title(self) -> str:
-        target = self.config.base_image_name or self.config.base_image_uri or "the selected image"
-        if self.base_image_is_cached():
-            return f"Checking package names for {target}..."
-        return f"Checking package names for {target}... First check may take a minute while the image downloads."
-
-    def query_available_packages_in_image(
-        self,
-        packages: Sequence[str],
-        *,
-        copr_repos: Sequence[str] | None = None,
-    ) -> set[str]:
-        if not self.config.base_image_uri:
-            raise CommandError("Choose a base image before adding packages.")
-        if not command_exists("podman"):
-            raise CommandError("Podman is required to check package names. Install it with: brew install podman")
-
-        repo_list = unique(copr_repos if copr_repos is not None else self.config.copr_repos)
-        package_list = unique(packages)
-        script_lines = ["set -eu"]
-        for repo in repo_list:
-            script_lines.append(f"dnf5 -y copr enable {shell_quote(repo)} >/dev/null")
-        if package_list:
-            joined = " ".join(shell_quote(pkg) for pkg in package_list)
-            script_lines.append(f"dnf5 repoquery --available --latest-limit 1 --qf '%{{name}}\\n' {joined}")
-        else:
-            script_lines.append("printf '__repo-check-ok__\\n'")
-        command = [
-            "podman",
-            "run",
-            "--rm",
-            "--pull=missing",
-            "--entrypoint",
-            "sh",
-            self.config.base_image_uri,
-            "-lc",
-            "\n".join(script_lines),
-        ]
-        try:
-            output = self.capture_command_output(self.package_check_title(), command)
-        except CommandError as exc:
-            raise CommandError(
-                "I couldn't check the package list in the selected image right now. "
-                "Please try again in a moment."
-            ) from exc
-        return {line.strip() for line in output.splitlines() if line.strip() and line.strip() != "__repo-check-ok__"}
-
-    def verify_copr_repositories(self, copr_repos: Sequence[str]) -> None:
-        try:
-            self.query_available_packages_in_image([], copr_repos=copr_repos)
-        except CommandError as exc:
-            raise CommandError(
-                "I couldn't verify that COPR repo in the selected image. "
-                "Check the owner/project name and try again."
-            ) from exc
-
-    def find_unavailable_packages(
-        self,
-        packages: Sequence[str],
-        *,
-        copr_repos: Sequence[str] | None = None,
-    ) -> list[str]:
-        package_list = unique(packages)
-        if not package_list:
-            return []
-        base_image_uri, repo_context = self.package_check_context(copr_repos=copr_repos)
-        uncached = [
-            pkg
-            for pkg in package_list
-            if (base_image_uri, repo_context, pkg) not in self.package_availability_cache
-        ]
-        if uncached:
-            available = self.query_available_packages_in_image(uncached, copr_repos=repo_context)
-            for pkg in uncached:
-                self.package_availability_cache[(base_image_uri, repo_context, pkg)] = pkg in available
-        return [
-            pkg
-            for pkg in package_list
-            if not self.package_availability_cache[(base_image_uri, repo_context, pkg)]
-        ]
-
-    def unavailable_package_message(
-        self,
-        packages: Sequence[str],
-        *,
-        copr_repos: Sequence[str] | None = None,
-    ) -> str:
-        image_name = self.config.base_image_name or self.config.base_image_uri or "the selected image"
-        sample = ", ".join(packages[:6])
-        extra = " ..." if len(packages) > 6 else ""
-        detail = f"These package names were not found for {image_name}: {sample}{extra}."
-        active_copr_repos = copr_repos if copr_repos is not None else self.config.copr_repos
-        if active_copr_repos:
-            return f"{detail} Check the spelling and make sure the COPR repo is correct."
-        return f"{detail} Check the spelling, or add the COPR repo first if those packages come from COPR."
-
     def add_packages_to_config(
         self,
         candidates: Iterable[str],
         *,
         source_label: str,
-        copr_repos: Sequence[str] | None = None,
     ) -> bool:
         packages = unique(candidates)
         if not packages:
             return False
         try:
-            unavailable = self.find_unavailable_packages(packages, copr_repos=copr_repos)
+            self.validate_token_list(packages, PACKAGE_TOKEN_RE, "package")
         except CommandError as exc:
             self.gum.error(str(exc))
             return False
-        available = [pkg for pkg in packages if pkg not in unavailable]
-        if available:
-            self.config.packages.extend(available)
-            self.config.normalize()
-            self.gum.success(f"Added {len(available)} package(s) from {source_label}")
-        if unavailable:
-            self.gum.warn(self.unavailable_package_message(unavailable, copr_repos=copr_repos))
-        return bool(available)
-
-    def validate_package_availability(self) -> None:
-        unavailable = self.find_unavailable_packages(self.config.packages)
-        if unavailable:
-            raise CommandError(self.unavailable_package_message(unavailable))
+        self.config.packages.extend(packages)
+        self.config.normalize()
+        self.gum.success(f"Added {len(packages)} package(s) from {source_label}")
+        return True
 
     def do_build(self) -> None:
         if not self.require_github():
@@ -1126,7 +996,6 @@ class App:
         repo = self.config.repo_name
         self.config.github_user = owner
         self.validate_config()
-        self.validate_package_availability()
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
         if exists:
@@ -1790,7 +1659,6 @@ class App:
 
     def write_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
         self.validate_config()
-        self.validate_package_availability()
         if self.config.method == "bluebuild" and self.config.removed_packages:
             raise CommandError("Removed base packages are only supported in Containerfile mode.")
         base_dir.mkdir(parents=True, exist_ok=True)

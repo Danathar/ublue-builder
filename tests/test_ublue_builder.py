@@ -29,30 +29,6 @@ class BuilderTests(unittest.TestCase):
         )
         return app
 
-    def make_query_stub_app(self, *, available: set[str] | None = None) -> App:
-        class QueryStubApp(App):
-            def __init__(self, available_packages: set[str]) -> None:
-                super().__init__()
-                self.available_packages = available_packages
-                self.query_calls: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
-
-            def query_available_packages_in_image(self, packages, *, copr_repos=None):
-                repos = tuple(copr_repos or ())
-                self.query_calls.append((tuple(packages), repos))
-                return set(self.available_packages).intersection(packages)
-
-        app = QueryStubApp(available or set())
-        app.config = Config(
-            method="containerfile",
-            base_image_uri="ghcr.io/ublue-os/bazzite:stable",
-            base_image_name="Bazzite",
-            base_image_tag="stable",
-            repo_name="test-image",
-            image_desc="Test image",
-            github_user="example",
-        )
-        return app
-
     def test_config_from_state_payload_rejects_string_list_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "packages must be a list of strings"):
             config_from_state_payload({"packages": "tmux"})
@@ -158,14 +134,8 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "Invalid package value"):
             app.validate_config()
 
-    def test_find_unavailable_packages_uses_cache(self) -> None:
-        app = self.make_query_stub_app(available={"tmux"})
-        self.assertEqual(app.find_unavailable_packages(["tmux", "ripgrep"]), ["ripgrep"])
-        self.assertEqual(app.find_unavailable_packages(["tmux", "ripgrep"]), ["ripgrep"])
-        self.assertEqual(len(app.query_calls), 1)
-
-    def test_add_packages_to_config_keeps_available_and_warns_on_missing(self) -> None:
-        app = self.make_query_stub_app(available={"tmux"})
+    def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
+        app = self.make_app()
 
         class GumStub:
             def __init__(self) -> None:
@@ -183,57 +153,41 @@ class BuilderTests(unittest.TestCase):
         app.gum = GumStub()
         added = app.add_packages_to_config(["tmux", "ripgrep"], source_label="manual entry")
         self.assertTrue(added)
-        self.assertEqual(app.config.packages, ["tmux"])
-        self.assertTrue(any(level == "warn" and "ripgrep" in message for level, message in app.gum.messages))
+        self.assertEqual(app.config.packages, ["tmux", "ripgrep"])
+        self.assertTrue(any(level == "success" for level, _message in app.gum.messages))
 
-    def test_validate_package_availability_rejects_missing_packages(self) -> None:
-        app = self.make_query_stub_app(available={"tmux"})
-        app.config.packages = ["tmux", "ripgrep"]
-        with self.assertRaisesRegex(CommandError, "ripgrep"):
-            app.validate_package_availability()
+    def test_add_packages_to_config_rejects_unsafe_tokens(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def success(self, message: str) -> None:
+                self.messages.append(("success", message))
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def error(self, message: str) -> None:
+                self.messages.append(("error", message))
+
+        app.gum = GumStub()
+        added = app.add_packages_to_config(["tmux", "bad;rm"], source_label="manual entry")
+        self.assertFalse(added)
+        self.assertEqual(app.config.packages, [])
+        self.assertTrue(any(level == "error" and "Invalid package value" in message for level, message in app.gum.messages))
 
     def test_do_build_validates_before_creating_repo(self) -> None:
         app = self.make_app()
         app.github_available = True
         app.github_user = "example"
         app.config.github_user = "example"
-        with patch.object(app, "validate_package_availability", side_effect=CommandError("bad package")):
-            with patch("ublue_builder.run") as run_mock:
-                with self.assertRaisesRegex(CommandError, "bad package"):
-                    app.do_build()
+        app.config.packages = ["bad;rm"]
+        with patch("ublue_builder.run") as run_mock:
+            with self.assertRaisesRegex(CommandError, "Invalid package value"):
+                app.do_build()
         run_mock.assert_not_called()
-
-    def test_query_available_packages_in_image_uses_line_delimited_queryformat(self) -> None:
-        class CaptureApp(App):
-            def __init__(self) -> None:
-                super().__init__()
-                self.last_command = None
-
-            def capture_command_output(self, title, command, *, cwd=None):
-                self.last_command = command
-                return "tmux\nripgrep\n"
-
-        app = CaptureApp()
-        app.config = Config(
-            method="containerfile",
-            base_image_uri="ghcr.io/ublue-os/bazzite:stable",
-            base_image_name="Bazzite",
-            base_image_tag="stable",
-            repo_name="test-image",
-            image_desc="Test image",
-            github_user="example",
-        )
-        with patch("ublue_builder.command_exists", return_value=True):
-            available = app.query_available_packages_in_image(["tmux", "ripgrep"])
-        self.assertEqual(available, {"tmux", "ripgrep"})
-        self.assertIsNotNone(app.last_command)
-        self.assertIn("%{name}\\n", app.last_command[-1])
-
-    def test_package_check_title_mentions_download_when_image_is_missing(self) -> None:
-        app = self.make_app()
-        with patch.object(app, "base_image_is_cached", return_value=False):
-            title = app.package_check_title()
-        self.assertIn("First check may take a minute", title)
 
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
