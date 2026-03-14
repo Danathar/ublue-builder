@@ -1541,6 +1541,10 @@ class App:
                 if self.config.signing_enabled:
                     output.append(line)
                 continue
+            if stripped in {"- recipe.yml", "- recipes/recipe.yml"}:
+                indent = line[: len(line) - len(line.lstrip())]
+                output.append(f"{indent}- recipe.yml")
+                continue
             output.append(line)
         if self.config.signing_enabled and not cosign_line_present:
             updated_output: list[str] = []
@@ -1864,7 +1868,7 @@ class App:
             "      fail-fast: false",
             "      matrix:",
             "        recipe:",
-            "          - recipes/recipe.yml",
+            "          - recipe.yml",
             "    steps:",
             "      - name: Build Custom Image",
             "        uses: blue-build/github-action@v1.11",
