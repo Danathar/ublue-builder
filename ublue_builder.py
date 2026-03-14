@@ -285,7 +285,7 @@ class Gum:
         print(self.style(message, faint=True, width=64))
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
-        args = ["gum", "confirm", prompt]
+        args = ["gum", "confirm", "--show-help", prompt]
         args.append("--default=true" if default else "--default=false")
         return run(args, check=False, capture=False).returncode == 0
 
@@ -297,7 +297,7 @@ class Gum:
         placeholder: str | None = None,
         width: int | None = None,
     ) -> str:
-        args = ["gum", "input", "--prompt", prompt]
+        args = ["gum", "input", "--show-help", "--prompt", prompt]
         if value is not None:
             args.extend(["--value", value])
         if placeholder is not None:
@@ -308,7 +308,7 @@ class Gum:
 
     def write(self, *, placeholder: str, height: int, width: int) -> str:
         return self.interactive_stdout(
-            ["gum", "write", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
+            ["gum", "write", "--show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
         ).stdout.rstrip("\n")
 
     def choose(
@@ -320,7 +320,7 @@ class Gum:
         selected: Sequence[str] | None = None,
         header: str | None = None,
     ) -> list[str]:
-        args = ["gum", "choose", "--height", str(height)]
+        args = ["gum", "choose", "--show-help", "--height", str(height)]
         if no_limit:
             args.append("--no-limit")
         if selected:
@@ -333,7 +333,7 @@ class Gum:
 
     def filter(self, options: Sequence[str], *, height: int = 20, placeholder: str = "Search...") -> str:
         proc = self.interactive_stdout(
-            ["gum", "filter", "--height", str(height), "--placeholder", placeholder],
+            ["gum", "filter", "--show-help", "--height", str(height), "--placeholder", placeholder],
             stdin="\n".join(options) + "\n",
         )
         return proc.stdout.strip()
@@ -539,7 +539,7 @@ class App:
     def main_menu(self) -> None:
         while True:
             self.gum.header("Main Menu")
-            self.gum.hint("Choose what you want to do, then press Enter. Use the arrow keys to move.")
+            self.gum.hint("Use the arrow keys to move and Enter to choose.")
             print()
             action = self.gum.choose(
                 [
@@ -578,7 +578,7 @@ class App:
 
     def choose_method(self) -> None:
         self.gum.header("Build Method")
-        self.gum.hint("Choose how you want this image to be defined, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
         print()
         options = [
             "Containerfile  - Shell script based (recommended)",
@@ -594,7 +594,7 @@ class App:
 
     def choose_base_image(self) -> None:
         self.gum.header("Base Image")
-        self.gum.hint("Pick the starting image you want to customize, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("DX means the image starts with extra developer tools already included.")
         print()
         if self.config.base_image_uri:
@@ -629,6 +629,8 @@ class App:
 
     def configure_repo(self) -> None:
         self.gum.header("Repository Configuration")
+        self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
+        print()
         default_name = self.config.repo_name or DEFAULT_REPO_NAME
         raw_name = self.gum.input(prompt="Repository name: ", value=default_name, placeholder=default_name, width=60)
         self.config.repo_name = sanitize_slug(raw_name, default_name)
@@ -650,7 +652,8 @@ class App:
     def select_packages(self) -> None:
         self.gum.header("Software Selection")
         while True:
-            self.gum.hint("Choose what you want to add or review. Pick Done when you are finished.")
+            self.gum.hint("Use the arrow keys to move and Enter to choose.")
+            self.gum.hint("Choose Done when you are finished and want to keep going.")
             print()
             selection = self.gum.choose(
                 [
@@ -683,7 +686,8 @@ class App:
 
     def select_from_catalog(self) -> None:
         self.gum.header("Package Catalog")
-        self.gum.hint("Choose a package group, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.hint("Choose Back to return to the previous menu.")
         print()
         options = list(CATALOGS) + ["Back"]
         choice = self.gum.choose(options, height=10)
@@ -691,7 +695,8 @@ class App:
         if selected == "Back":
             return
         current = set(self.config.packages)
-        self.gum.hint("Choose the packages you want from this group, then press Enter.")
+        self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages.")
+        self.gum.hint("Press Enter when you are finished, or leave everything unselected to make no changes.")
         print()
         picked = self.gum.choose(
             CATALOGS[selected],
@@ -706,11 +711,14 @@ class App:
         print()
         self.gum.hint("Enter RPM package names separated by spaces or newlines.")
         self.gum.hint("The GitHub build will do the final check that each package name exists.")
+        self.gum.hint("Leave this empty if you want to go back without adding anything.")
         print()
         raw = self.gum.write(placeholder="Enter package names...", height=6, width=70)
         self.add_packages_to_config((token.strip(",") for token in raw.split()), source_label="manual entry")
 
     def add_copr(self) -> None:
+        print()
+        self.gum.hint("Leave the COPR repo field empty if you want to go back.")
         print()
         repo = self.gum.input(prompt="COPR repo: ", placeholder="owner/project", width=50)
         repo = repo.strip()
@@ -731,6 +739,7 @@ class App:
 
     def add_services(self) -> None:
         print()
+        self.gum.hint("Enter one service per line. Leave this empty if you want to go back.")
         raw = self.gum.write(placeholder="Enter service names, one per line...", height=5, width=50)
         self.config.services.extend(line.strip() for line in raw.splitlines())
         self.config.normalize()
@@ -740,6 +749,7 @@ class App:
         if self.config.method != "bluebuild":
             self.gum.warn("Flatpaks in generated config are only supported in BlueBuild mode.")
             return
+        self.gum.hint("Enter one Flatpak ID per line. Leave this empty if you want to go back.")
         raw = self.gum.write(placeholder="Enter flatpak IDs, one per line...", height=5, width=60)
         self.config.flatpaks.extend(line.strip() for line in raw.splitlines())
         self.config.normalize()
@@ -838,7 +848,8 @@ class App:
         print()
 
         if self.config.scanned_packages:
-            self.gum.hint("Choose the layered packages you want to carry over, then press Enter.")
+            self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to carry over.")
+            self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
             selected = self.gum.choose(
                 self.config.scanned_packages,
@@ -854,7 +865,8 @@ class App:
                 return False
 
         if self.config.scanned_removed:
-            self.gum.hint("Choose any base packages you want removed in the new image, then press Enter.")
+            self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark packages to remove.")
+            self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
             print()
             selected_removed = self.gum.choose(
                 self.config.scanned_removed,
@@ -1091,7 +1103,8 @@ class App:
             mapping[label] = (self.github_user, item["name"])
         manual_label = "Type a repository name manually"
         labels.append(manual_label)
-        self.gum.hint("Choose a repository below, or pick the last option to type its name yourself.")
+        self.gum.hint("Type to search, then use the arrow keys to move and Enter to choose.")
+        self.gum.hint("Choose the last option if you want to type a repository name yourself.")
         print()
         choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
         if choice == manual_label:
@@ -1312,7 +1325,8 @@ class App:
     def update_menu(self) -> None:
         while True:
             self.gum.header("Update Image")
-            self.gum.hint("Choose what you want to change. Pick Done when you are finished.")
+            self.gum.hint("Use the arrow keys to move and Enter to choose.")
+            self.gum.hint("Choose Done when you are finished and want to keep going.")
             print()
             choice = self.gum.choose(
                 [
@@ -1366,13 +1380,15 @@ class App:
         if not values:
             self.gum.warn("Nothing to remove.")
             return values
-        self.gum.hint("Choose the items you want to remove, then press Enter.")
+        self.gum.hint("Move with the arrow keys. Use the help shown at the bottom to mark items to remove.")
+        self.gum.hint("Press Enter when you are finished, or leave everything unselected to keep everything.")
         print()
         selected = set(self.gum.choose(values, no_limit=True, height=20, header=header))
         return [value for value in values if value not in selected]
 
     def manage_services(self) -> None:
-        self.gum.hint("Choose what you want to do with services, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.hint("Choose Back to return to the previous menu.")
         print()
         choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
         selected = choice[0] if choice else "Back"
@@ -1385,7 +1401,8 @@ class App:
         if self.config.method != "bluebuild":
             self.gum.warn("Flatpak management in generated config is only available for BlueBuild.")
             return
-        self.gum.hint("Choose what you want to do with Flatpaks, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.hint("Choose Back to return to the previous menu.")
         print()
         choice = self.gum.choose(["Add Flatpaks", "Remove Flatpaks", "Back"], height=5)
         selected = choice[0] if choice else "Back"
@@ -1398,11 +1415,13 @@ class App:
         if self.config.method != "containerfile":
             self.gum.warn("Removed base packages are only supported in Containerfile mode.")
             return
-        self.gum.hint("Choose what you want to do with removed base packages, then press Enter.")
+        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.hint("Choose Back to return to the previous menu.")
         print()
         choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
         selected = choice[0] if choice else "Back"
         if selected == "Add removed base packages":
+            self.gum.hint("Enter one package name per line. Leave this empty if you want to go back.")
             raw = self.gum.write(placeholder="Enter package names, one per line...", height=6, width=60)
             self.config.removed_packages.extend(line.strip() for line in raw.splitlines())
             self.config.normalize()
