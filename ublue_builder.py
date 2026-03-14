@@ -113,6 +113,16 @@ def sanitize_slug(value: str, default: str = DEFAULT_REPO_NAME) -> str:
     return cleaned or default
 
 
+def is_valid_repo_name(value: str) -> bool:
+    if not value or len(value) > 100:
+        return False
+    if value.endswith(".git"):
+        return False
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?", value):
+        return False
+    return True
+
+
 def yaml_scalar(value: str) -> str:
     return json.dumps(value)
 
@@ -317,7 +327,10 @@ class Gum:
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
         args = ["gum", "confirm", "--no-show-help", prompt]
         args.append("--default=true" if default else "--default=false")
-        return run(args, check=False, capture=False).returncode == 0
+        proc = run(args, check=False, capture=False)
+        if proc.returncode == 130:
+            raise KeyboardInterrupt()
+        return proc.returncode == 0
 
     def input(
         self,
@@ -775,32 +788,39 @@ class App:
         self.gum.success(f"Base image: {self.config.base_image_name} ({self.config.base_image_uri})")
 
     def configure_repo(self, *, step: int | None = None, total_steps: int | None = None) -> None:
-        if step is not None and total_steps is not None:
-            self.show_step_header("Repository Configuration", step=step, total_steps=total_steps)
-        else:
-            self.gum.header("Repository Configuration")
-        self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
-        print()
-        default_name = self.config.repo_name or DEFAULT_REPO_NAME
-        raw_name = self.gum.input(
-            prompt="Repository name: ",
-            placeholder=default_name,
-            width=self.gum.form_width(max_width=72),
-        )
-        self.config.repo_name = sanitize_slug(raw_name or default_name, default_name)
-        print()
-        self.config.image_desc = self.gum.input(
-            prompt="Description: ",
-            placeholder=self.config.image_desc,
-            width=self.gum.form_width(max_width=110),
-        ) or self.config.image_desc
-        print()
-        self.gum.hint("Repositories created by this tool are public.")
-        print()
-        if self.github_user:
-            self.gum.success(f"Repo: {self.github_user}/{self.config.repo_name}")
-        else:
-            self.gum.success(f"Repo name: {self.config.repo_name}")
+        while True:
+            if step is not None and total_steps is not None:
+                self.show_step_header("Repository Configuration", step=step, total_steps=total_steps)
+            else:
+                self.gum.header("Repository Configuration")
+            self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
+            print()
+            default_name = self.config.repo_name or DEFAULT_REPO_NAME
+            raw_name = self.gum.input(
+                prompt="Repository name: ",
+                placeholder=default_name,
+                width=self.gum.form_width(max_width=72),
+            )
+            candidate_name = sanitize_slug(raw_name or default_name, default_name)
+            if not is_valid_repo_name(candidate_name):
+                self.gum.error("Repository names must start and end with a letter or number, and they cannot end with .git.")
+                self.gum.enter_to_continue("Press Enter to try another repository name...")
+                continue
+            self.config.repo_name = candidate_name
+            print()
+            self.config.image_desc = self.gum.input(
+                prompt="Description: ",
+                placeholder=self.config.image_desc,
+                width=self.gum.form_width(max_width=110),
+            ) or self.config.image_desc
+            print()
+            self.gum.hint("Repositories created by this tool are public.")
+            print()
+            if self.github_user:
+                self.gum.success(f"Repo: {self.github_user}/{self.config.repo_name}")
+            else:
+                self.gum.success(f"Repo name: {self.config.repo_name}")
+            return
 
     def select_packages(self, *, step: int | None = None, total_steps: int | None = None) -> None:
         if step is not None and total_steps is not None:
@@ -1397,18 +1417,26 @@ class App:
             f"Creating {owner}/{repo}...",
             ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
         )
-        self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
+        pushed = False
+        try:
+            self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
 
-        with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
-            tmpdir = Path(tmp)
-            self.seed_project_template(tmpdir)
-            branch = self.repo_default_branch(owner, repo)
-            run(["git", "init", "-b", branch], cwd=tmpdir)
-            run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
-            self.write_project_files(tmpdir, include_workflow=True)
-            run(["git", "add", "-A"], cwd=tmpdir)
-            run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir, check=False)
-            run(["git", "push", "origin", "HEAD"], cwd=tmpdir, capture=False)
+            with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
+                tmpdir = Path(tmp)
+                self.seed_project_template(tmpdir)
+                branch = self.repo_default_branch(owner, repo)
+                run(["git", "init", "-b", branch], cwd=tmpdir)
+                run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
+                self.write_project_files(tmpdir, include_workflow=True)
+                run(["git", "add", "-A"], cwd=tmpdir)
+                run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir, check=False)
+                run(["git", "push", "origin", "HEAD"], cwd=tmpdir, capture=False)
+                pushed = True
+        except Exception:
+            if not pushed:
+                self.gum.warn("Setup failed after the GitHub repo was created. Removing the empty repo so you can try again cleanly.")
+                run(["gh", "repo", "delete", f"{owner}/{repo}", "--yes"], check=False, capture=False)
+            raise
 
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
         summary_lines = [
@@ -1616,7 +1644,12 @@ class App:
                     if match:
                         cfg.copr_repos.append(match.group(1))
                 if "systemctl enable" in line:
-                    cfg.services.append(line.split("systemctl enable", 1)[1].strip())
+                    service_tokens = [
+                        token
+                        for token in line.split("systemctl enable", 1)[1].split()
+                        if token and not token.startswith("-")
+                    ]
+                    cfg.services.extend(service_tokens)
                 if re.search(r"\bdnf5?\s+remove\b", line):
                     mode = "remove"
                     block = [line]
@@ -1863,6 +1896,10 @@ class App:
         self.validate_token_list(self.config.removed_packages, PACKAGE_TOKEN_RE, "removed package")
         self.validate_token_list(self.config.copr_repos, COPR_REPO_RE, "COPR repository")
         self.validate_token_list(self.config.services, SERVICE_TOKEN_RE, "systemd service")
+        if not is_valid_repo_name(self.config.repo_name):
+            raise CommandError(
+                "Repository name is invalid. It must start and end with a letter or number, and it cannot end with .git."
+            )
 
     def state_payload(self) -> dict[str, object]:
         self.validate_config()
@@ -1907,8 +1944,6 @@ class App:
         lines = existing_text.splitlines()
         output: list[str] = []
         current_step = ""
-        inserted_job_env = False
-        has_job_env = any(re.fullmatch(r" {4}env:", line) for line in lines)
         has_job_cosign = any(re.fullmatch(r" {6}COSIGN_PRIVATE_KEY: \$\{\{ secrets\.SIGNING_SECRET \}\}", line) for line in lines)
         state_ignore_present = any(STATE_FILE in line for line in lines)
         for line in lines:
@@ -1927,16 +1962,30 @@ class App:
                 continue
             if stripped.startswith("- name: "):
                 current_step = stripped[len("- name: ") :]
-            if stripped == "steps:" and not inserted_job_env and not has_job_env and not has_job_cosign:
-                output.append("    env:")
-                output.append("      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}")
-                inserted_job_env = True
             if current_step in {"Install Cosign", "Sign container image"} and stripped.startswith("if: ") and branch_if in stripped:
                 indent = line[: len(line) - len(line.lstrip())]
                 output.append(f"{indent}if: {sign_if}")
                 continue
             output.append(line)
-        return ensure_trailing_newline("\n".join(output))
+        text = "\n".join(output)
+        if not has_job_cosign:
+            if re.search(r"^    env:\n", text, flags=re.MULTILINE):
+                text = re.sub(
+                    r"^    env:\n",
+                    "    env:\n      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}\n",
+                    text,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+            elif re.search(r"^    steps:\n", text, flags=re.MULTILINE):
+                text = re.sub(
+                    r"^    steps:\n",
+                    "    env:\n      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}\n    steps:\n",
+                    text,
+                    count=1,
+                    flags=re.MULTILINE,
+                )
+        return ensure_trailing_newline(text)
 
     def write_container_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
         readme_path = base_dir / "README.md"

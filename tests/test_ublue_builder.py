@@ -116,6 +116,12 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "supported base images"):
             app.validate_config()
 
+    def test_validate_config_rejects_invalid_repo_name(self) -> None:
+        app = self.make_app()
+        app.config.repo_name = ".git"
+        with self.assertRaisesRegex(CommandError, "Repository name is invalid"):
+            app.validate_config()
+
     def test_ensure_signing_ready_requires_cosign(self) -> None:
         app = self.make_app()
         with patch.object(app, "repo_secret_exists", return_value=False):
@@ -413,6 +419,46 @@ class BuilderTests(unittest.TestCase):
                 app.do_build()
         run_mock.assert_not_called()
 
+    def test_do_build_deletes_repo_if_setup_fails_after_creation(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def header(self, _title: str) -> None:
+                pass
+
+            def spinner(self, _title, _command, *, cwd=None) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+        app.gum = GumStub()
+
+        run_calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            run_calls.append(list(args))
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            if args[:3] == ["gh", "repo", "delete"]:
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with patch("ublue_builder.run", side_effect=fake_run):
+            with patch.object(app, "ensure_signing_ready", side_effect=CommandError("signing failed")):
+                with self.assertRaisesRegex(CommandError, "signing failed"):
+                    app.do_build()
+        self.assertIn(["gh", "repo", "delete", "example/test-image", "--yes"], run_calls)
+
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / ".template-source").is_file())
@@ -447,6 +493,13 @@ class BuilderTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 gum.input(prompt="Repository name: ")
 
+    def test_gum_confirm_raises_keyboard_interrupt_on_ctrl_c(self) -> None:
+        gum = Gum()
+        completed = subprocess.CompletedProcess(["gum", "confirm"], 130, "", "")
+        with patch("ublue_builder.run", return_value=completed):
+            with self.assertRaises(KeyboardInterrupt):
+                gum.confirm("Continue?")
+
     def test_update_task_choices_show_current_status(self) -> None:
         app = self.make_app()
         app.config.packages = ["tmux", "ripgrep"]
@@ -464,6 +517,46 @@ class BuilderTests(unittest.TestCase):
         text = app.pager_text_with_hint("diff --git a/file b/file\n+new line\n")
         self.assertTrue(text.startswith("Press q to close this diff and return to the previous screen."))
         self.assertIn("diff --git a/file b/file", text)
+
+    def test_import_legacy_containerfile_splits_multiple_services(self) -> None:
+        repo = textwrap.dedent(
+            """\
+            FROM ghcr.io/ublue-os/bazzite:stable
+            """
+        )
+        build_sh = textwrap.dedent(
+            """\
+            #!/bin/bash
+            set -ouex pipefail
+            systemctl enable sshd.service cockpit.socket
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            (repo_dir / "Containerfile").write_text(repo)
+            (repo_dir / "build_files").mkdir()
+            (repo_dir / "build_files/build.sh").write_text(build_sh)
+            cfg = self.make_app().import_legacy_containerfile(repo_dir)
+        self.assertEqual(cfg.services, ["sshd.service", "cockpit.socket"])
+
+    def test_patch_container_workflow_injects_cosign_key_into_existing_job_env(self) -> None:
+        app = self.make_app()
+        workflow = textwrap.dedent(
+            """\
+            name: Build container image
+            jobs:
+              build_push:
+                env:
+                  FOO: bar
+                steps:
+                  - name: Install Cosign
+                    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+                    uses: sigstore/cosign-installer@v3
+            """
+        )
+        patched = app.patch_container_workflow(workflow)
+        self.assertIn("      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}", patched)
+        self.assertIn("      FOO: bar", patched)
 
 
 if __name__ == "__main__":
