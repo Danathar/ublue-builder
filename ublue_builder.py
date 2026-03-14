@@ -24,6 +24,21 @@ CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 CONTAINERFILE_TEMPLATE_GIT_URL = f"https://github.com/{CONTAINERFILE_TEMPLATE_REPO}.git"
 BLUEBUILD_TEMPLATE_REPO = "blue-build/template"
 BLUEBUILD_TEMPLATE_GIT_URL = f"https://github.com/{BLUEBUILD_TEMPLATE_REPO}.git"
+ALLOWED_METHODS = {"containerfile", "bluebuild"}
+PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
+COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+SERVICE_TOKEN_RE = re.compile(r"^[A-Za-z0-9@._:+-]+$")
+FLATPAK_ID_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+ACTION_PINS: dict[str, tuple[str, str]] = {
+    "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6"),
+    "ublue-os/remove-unwanted-software": ("695eb75bc387dbcd9685a8e72d23439d8686cba6", "v8"),
+    "docker/metadata-action": ("c299e40c65443455700f0fdfc63efafe5b349051", "v5"),
+    "redhat-actions/buildah-build": ("7a95fa7ee0f02d552a32753e7414641a04307056", "v2"),
+    "docker/login-action": ("c94ce9fb468520275223c153574b00df6fe4bcc9", "v3"),
+    "redhat-actions/push-to-registry": ("5ed88d269cf581ea9ef6dd6806d01562096bee9c", "v2"),
+    "sigstore/cosign-installer": ("faadad0cce49287aee09b3a48701e75088a2c6ad", "v4.0.0"),
+    "blue-build/github-action": ("24d146df25adc2cf579e918efe2d9bff6adea408", "v1.11"),
+}
 
 
 @dataclass(frozen=True)
@@ -112,6 +127,88 @@ def ensure_trailing_newline(text: str) -> str:
 
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
+
+
+def shell_quote(value: str) -> str:
+    return shlex.quote(value)
+
+
+def validate_string_list(value: object, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of strings")
+    invalid = [item for item in value if not isinstance(item, str)]
+    if invalid:
+        raise ValueError(f"{field_name} must contain only strings")
+    return list(value)
+
+
+def config_from_state_payload(data: object) -> Config:
+    if not isinstance(data, dict):
+        raise ValueError("state file must contain a JSON object")
+    state_version = data.get("state_version")
+    if state_version is not None:
+        if not isinstance(state_version, int):
+            raise ValueError("state_version must be an integer")
+        if state_version > 1:
+            raise ValueError(f"unsupported state_version: {state_version}")
+
+    cfg = Config()
+    list_fields = {
+        "packages",
+        "copr_repos",
+        "services",
+        "flatpaks",
+        "removed_packages",
+        "scanned_packages",
+        "scanned_removed",
+    }
+    string_fields = {
+        "method",
+        "base_image_uri",
+        "base_image_name",
+        "base_image_tag",
+        "repo_name",
+        "image_desc",
+        "github_user",
+        "scanned_base",
+    }
+    for name in list_fields:
+        if name in data:
+            setattr(cfg, name, validate_string_list(data[name], name))
+    for name in string_fields:
+        if name in data:
+            value = data[name]
+            if not isinstance(value, str):
+                raise ValueError(f"{name} must be a string")
+            setattr(cfg, name, value)
+    if "signing_enabled" in data:
+        value = data["signing_enabled"]
+        if not isinstance(value, bool):
+            raise ValueError("signing_enabled must be a boolean")
+        cfg.signing_enabled = value
+    if cfg.method and cfg.method not in ALLOWED_METHODS:
+        raise ValueError(f"unsupported build method: {cfg.method}")
+    cfg.normalize()
+    return cfg
+
+
+def pin_action_uses_line(line: str) -> str:
+    match = re.fullmatch(r"(\s*uses:\s+)([^@\s]+)@([^\s#]+)(.*)", line)
+    if not match:
+        return line
+    prefix, action, _ref, suffix = match.groups()
+    pin = ACTION_PINS.get(action)
+    if not pin:
+        return line
+    sha, label = pin
+    suffix = re.sub(r"\s+#.*$", "", suffix)
+    comment = f" # {label}"
+    return f"{prefix}{action}@{sha}{comment}"
+
+
+def pinned_action(action: str) -> str:
+    sha, label = ACTION_PINS[action]
+    return f"{action}@{sha} # {label}"
 
 
 class CommandError(RuntimeError):
@@ -445,11 +542,12 @@ class App:
                     "Create New Image",
                     "Scan OS & Migrate Layered Packages",
                     "Update Existing Image",
+                    "Import Legacy Repo",
                     "Build & Install Locally",
                     "Set Up Nightly Local Build",
                     "Quit",
                 ],
-                height=10,
+                height=12,
             )
             selected = action[0] if action else "Quit"
             if selected == "Quit":
@@ -463,6 +561,9 @@ class App:
                 return
             if selected == "Update Existing Image":
                 self.update_existing_image()
+                return
+            if selected == "Import Legacy Repo":
+                self.import_legacy_repo()
                 return
             if selected == "Build & Install Locally":
                 self.local_build_image()
@@ -758,6 +859,24 @@ class App:
             return False
         return any(line.split()[0] == secret_name for line in proc.stdout.splitlines() if line.strip())
 
+    def repo_file_exists(self, owner: str, repo: str, path: str) -> bool:
+        proc = run(["gh", "api", f"/repos/{owner}/{repo}/contents/{path}"], check=False)
+        return proc.returncode == 0
+
+    def repo_has_state_file(self, owner: str, repo: str) -> bool:
+        return self.repo_file_exists(owner, repo, STATE_FILE)
+
+    def repo_is_builder_managed_dir(self, repo_dir: Path) -> bool:
+        return (repo_dir / STATE_FILE).is_file()
+
+    def repo_looks_like_legacy_dir(self, repo_dir: Path) -> bool:
+        if self.repo_is_builder_managed_dir(repo_dir):
+            return False
+        if (repo_dir / "recipes/recipe.yml").exists():
+            return True
+        build_script_exists = (repo_dir / "build_files/build.sh").exists() or (repo_dir / "build.sh").exists()
+        return (repo_dir / "Containerfile").exists() and build_script_exists
+
     def maybe_enable_signing(self, owner: str, repo: str) -> bool:
         self.generated_cosign_pub = None
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
@@ -860,31 +979,30 @@ class App:
         self.config.github_user = owner
         self.gum.header("Building Image")
         exists = run(["gh", "repo", "view", f"{owner}/{repo}", "--json", "name"], check=False).returncode == 0
-        if not exists:
-            self.gum.spinner(
-                f"Creating {owner}/{repo}...",
-                ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
-            )
+        if exists:
+            self.gum.error(f"{owner}/{repo} already exists on GitHub.")
+            if self.repo_has_state_file(owner, repo):
+                self.gum.hint("That repo was already created by this tool. Use 'Update Existing Image' to change it, or pick a new repo name.")
+            else:
+                self.gum.hint("That repo was not created by this tool. Use 'Import Legacy Repo' if you want this tool to take it over, or pick a new repo name.")
+            return
+        self.gum.spinner(
+            f"Creating {owner}/{repo}...",
+            ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
+        )
         self.config.signing_enabled = self.maybe_enable_signing(owner, repo)
 
         with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
             tmpdir = Path(tmp)
-            if exists:
-                self.clone_repo(owner, repo, tmpdir)
-            else:
-                self.seed_project_template(tmpdir)
-                branch = self.repo_default_branch(owner, repo)
-                run(["git", "init", "-b", branch], cwd=tmpdir)
-                run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
+            self.seed_project_template(tmpdir)
+            branch = self.repo_default_branch(owner, repo)
+            run(["git", "init", "-b", branch], cwd=tmpdir)
+            run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
             self.write_project_files(tmpdir, include_workflow=True)
             run(["git", "add", "-A"], cwd=tmpdir)
             run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir, check=False)
             run(["git", "push", "origin", "HEAD"], cwd=tmpdir, capture=False)
 
-        run(
-            ["gh", "api", "-X", "PUT", f"/repos/{owner}/{repo}/actions/permissions", "-f", "enabled=true", "-f", "allowed_actions=all"],
-            check=False,
-        )
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
         summary_lines = [
             "Build Complete",
@@ -907,14 +1025,19 @@ class App:
             )
         )
 
-    def select_repo(self) -> tuple[str, str]:
+    def select_repo(self, *, require_state_file: bool = False) -> tuple[str, str]:
         if not self.require_github():
             raise SystemExit(1)
         repos = self.gh_json_with_spinner(
             "Fetching repositories from GitHub...",
             ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
         )
+        if require_state_file:
+            self.gum.hint("Checking which repos were created by this tool...")
+            repos = [item for item in repos if self.repo_has_state_file(self.github_user, item["name"])]
         if not repos:
+            if require_state_file:
+                raise SystemExit("I couldn't find any GitHub repos on your account that were created by this tool yet.")
             raise SystemExit("No repositories found on your GitHub account.")
         labels: list[str] = []
         mapping: dict[str, tuple[str, str]] = {}
@@ -931,6 +1054,10 @@ class App:
         if choice == manual_label:
             repo = sanitize_slug(self.gum.input(prompt="Repository name: ", placeholder=DEFAULT_REPO_NAME, width=50))
             self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name"])
+            if require_state_file and not self.repo_has_state_file(self.github_user, repo):
+                raise CommandError(
+                    f"{self.github_user}/{repo} was not created by this tool. Use 'Import Legacy Repo' first if you want to manage it here."
+                )
             return self.github_user, repo
         if choice in mapping:
             return mapping[choice]
@@ -939,7 +1066,7 @@ class App:
     def update_existing_image(self) -> None:
         if not self.require_github():
             return
-        owner, repo = self.select_repo()
+        owner, repo = self.select_repo(require_state_file=True)
         self.config.repo_name = repo
         self.config.github_user = owner
         with tempfile.TemporaryDirectory(prefix="ublue-update.") as tmp:
@@ -960,16 +1087,49 @@ class App:
             print()
             self.push_update(owner, repo, tmpdir)
 
+    def import_legacy_repo(self) -> None:
+        if not self.require_github():
+            return
+        owner, repo = self.select_repo()
+        with tempfile.TemporaryDirectory(prefix="ublue-import.") as tmp:
+            tmpdir = Path(tmp)
+            self.clone_repo(owner, repo, tmpdir)
+            if self.repo_is_builder_managed_dir(tmpdir):
+                self.gum.error(f"{owner}/{repo} is already managed by this tool.")
+                self.gum.hint("Use 'Update Existing Image' instead.")
+                return
+            if not self.repo_looks_like_legacy_dir(tmpdir):
+                self.gum.error(f"{owner}/{repo} does not look like a repo this tool knows how to import.")
+                self.gum.hint("I expected to find either a BlueBuild recipe or a Containerfile with a build script.")
+                return
+            self.import_legacy_config(tmpdir)
+            self.config.repo_name = repo
+            self.config.github_user = owner
+            self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
+            print()
+            self.gum.warn("This repo was made another way, and this tool is about to take over managing it.")
+            self.gum.hint("If you continue, the tool will save its own settings file and rewrite the files it manages.")
+            self.show_summary()
+            self.gum.enter_to_continue("Press Enter to review and edit the imported settings...")
+            self.update_menu()
+            self.show_summary()
+            print()
+            if not self.gum.confirm(f"Let this tool take over {owner}/{repo}?", default=False):
+                return
+            self.push_update(owner, repo, tmpdir)
+
     def load_repo_config(self, repo_dir: Path) -> None:
         self.used_legacy_import = False
         state_path = repo_dir / STATE_FILE
         if state_path.exists():
             try:
                 data = json.loads(state_path.read_text())
-                cfg = Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
+                cfg = config_from_state_payload(data)
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise CommandError(f"Unable to read {STATE_FILE}: {exc}") from exc
-            cfg.normalize()
+                raise CommandError(
+                    "This repo's saved builder settings file is missing or broken. "
+                    "If you edited it by hand, restore it or import the repo again."
+                ) from exc
             self.config = cfg
             self.github_user = cfg.github_user or self.github_user
             return
@@ -979,8 +1139,10 @@ class App:
         self.used_legacy_import = True
         if (repo_dir / "recipes/recipe.yml").exists():
             self.config = self.import_legacy_bluebuild(repo_dir)
-        else:
+        elif self.repo_looks_like_legacy_dir(repo_dir):
             self.config = self.import_legacy_containerfile(repo_dir)
+        else:
+            raise CommandError("Repository does not contain a supported legacy builder layout.")
         if not self.config.repo_name:
             self.config.repo_name = DEFAULT_REPO_NAME
         self.config.github_user = self.github_user
@@ -1074,6 +1236,7 @@ class App:
             elif stripped.startswith("- type: systemd"):
                 section = "systemd"
                 in_services = False
+                in_flatpaks = False
             elif stripped.startswith("packages:") and section == "dnf":
                 section = "dnf-packages"
             elif stripped.startswith("copr:") and section == "dnf":
@@ -1082,6 +1245,8 @@ class App:
                 in_flatpaks = True
             elif stripped.startswith("enabled:") and section == "systemd":
                 in_services = True
+            elif stripped.startswith("- scope:") and section == "flatpak":
+                in_flatpaks = False
             elif stripped.startswith("- "):
                 value = stripped[2:].strip().strip('"')
                 if section == "dnf-packages":
@@ -1192,7 +1357,7 @@ class App:
             self.config.removed_packages = self.choose_to_remove(self.config.removed_packages, "Remove Base Package Removals")
 
     def push_update(self, owner: str, repo: str, repo_dir: Path) -> None:
-        self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET") or self.maybe_enable_signing(owner, repo)
+        self.config.signing_enabled = self.repo_secret_exists(owner, repo, "SIGNING_SECRET")
         self.write_project_files(repo_dir, include_workflow=True)
         diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
         if not diff:
@@ -1399,8 +1564,26 @@ class App:
             self.gum.warn("Auto-stage uses 'sudo -n'; configure passwordless sudo for /usr/bin/bootc or the stage step will fail.")
         self.gum.success("Nightly build timer created.")
 
-    def state_payload(self) -> dict[str, object]:
+    def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
+        invalid = [value for value in values if not pattern.fullmatch(value)]
+        if invalid:
+            sample = ", ".join(invalid[:3])
+            raise CommandError(f"Invalid {label} value(s): {sample}")
+
+    def validate_config(self) -> None:
         self.config.normalize()
+        if self.config.method not in ALLOWED_METHODS:
+            raise CommandError("Choose a supported build method before writing project files.")
+        if not self.config.base_image_uri or re.search(r"\s", self.config.base_image_uri):
+            raise CommandError("Base image URI is missing or invalid.")
+        self.validate_token_list(self.config.packages, PACKAGE_TOKEN_RE, "package")
+        self.validate_token_list(self.config.removed_packages, PACKAGE_TOKEN_RE, "removed package")
+        self.validate_token_list(self.config.copr_repos, COPR_REPO_RE, "COPR repository")
+        self.validate_token_list(self.config.services, SERVICE_TOKEN_RE, "systemd service")
+        self.validate_token_list(self.config.flatpaks, FLATPAK_ID_RE, "Flatpak ID")
+
+    def state_payload(self) -> dict[str, object]:
+        self.validate_config()
         payload = asdict(self.config)
         payload["tool_version"] = VERSION
         payload["state_version"] = 1
@@ -1445,11 +1628,17 @@ class App:
         inserted_job_env = False
         has_job_env = any(re.fullmatch(r" {4}env:", line) for line in lines)
         has_job_cosign = any(re.fullmatch(r" {6}COSIGN_PRIVATE_KEY: \$\{\{ secrets\.SIGNING_SECRET \}\}", line) for line in lines)
+        state_ignore_present = any(STATE_FILE in line for line in lines)
         for line in lines:
+            line = pin_action_uses_line(line)
             stripped = line.strip()
             if stripped.startswith("- cron:"):
                 indent = line[: len(line) - len(line.lstrip())]
                 output.append(f"{indent}- cron: '{DEFAULT_GITHUB_BUILD_CRON}'")
+                continue
+            if stripped in {"- '**/README.md'", '- "**/README.md"'} and not state_ignore_present:
+                output.append(line)
+                output.append(f"{line[: len(line) - len(line.lstrip())]}- '{STATE_FILE}'")
                 continue
             if stripped.startswith("IMAGE_DESC:"):
                 output.append(f"  IMAGE_DESC: {yaml_scalar(self.config.image_desc)}")
@@ -1516,6 +1705,7 @@ class App:
         cosign_line_present = any("cosign_private_key:" in line for line in lines)
         pending_schedule_multiline = False
         for line in lines:
+            line = pin_action_uses_line(line)
             stripped = line.strip()
             if stripped.startswith('- cron: "') or stripped.startswith("- cron: '"):
                 indent = line[: len(line) - len(line.lstrip())]
@@ -1634,6 +1824,7 @@ class App:
                 workflow_path.write_text(self.generate_container_workflow())
 
     def write_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+        self.validate_config()
         if self.config.method == "bluebuild" and self.config.removed_packages:
             raise CommandError("Removed base packages are only supported in Containerfile mode.")
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -1667,33 +1858,33 @@ class App:
         if self.config.copr_repos:
             lines.append("# Enable COPR repositories")
             for repo in self.config.copr_repos:
-                lines.append(f"dnf5 -y copr enable {repo}")
+                lines.append(f"dnf5 -y copr enable {shell_quote(repo)}")
             lines.append("")
         if self.config.removed_packages:
             lines.append("# Remove packages from the base image")
             lines.append("dnf5 remove -y \\")
             for index, pkg in enumerate(self.config.removed_packages):
                 suffix = " \\" if index < len(self.config.removed_packages) - 1 else ""
-                lines.append(f"    {pkg}{suffix}")
+                lines.append(f"    {shell_quote(pkg)}{suffix}")
             lines.append("")
         if self.config.packages:
             lines.append("# Install packages")
             lines.append("dnf5 install -y \\")
             for index, pkg in enumerate(self.config.packages):
                 suffix = " \\" if index < len(self.config.packages) - 1 else ""
-                lines.append(f"    {pkg}{suffix}")
+                lines.append(f"    {shell_quote(pkg)}{suffix}")
             lines.append("")
         else:
             lines.extend(["# dnf5 install -y <your-packages-here>", ""])
         if self.config.copr_repos:
             lines.append("# Disable COPRs so they do not persist in the final image")
             for repo in self.config.copr_repos:
-                lines.append(f"dnf5 -y copr disable {repo}")
+                lines.append(f"dnf5 -y copr disable {shell_quote(repo)}")
             lines.append("")
         if self.config.services:
             lines.append("# Enable systemd services")
             for service in self.config.services:
-                lines.append(f"systemctl enable {service}")
+                lines.append(f"systemctl enable {shell_quote(service)}")
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
@@ -1736,17 +1927,17 @@ class App:
             '          echo "IMAGE_NAME=${IMAGE_NAME,,}" >> $GITHUB_ENV',
             "",
             "      - name: Checkout",
-            "        uses: actions/checkout@v4",
+            f"        uses: {pinned_action('actions/checkout')}",
             "",
             "      - name: Maximize build space",
-            "        uses: ublue-os/remove-unwanted-software@v8",
+            f"        uses: {pinned_action('ublue-os/remove-unwanted-software')}",
             "",
             "      - name: Get current date",
             "        id: date",
             '        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT',
             "",
             "      - name: Image Metadata",
-            "        uses: docker/metadata-action@v5",
+            f"        uses: {pinned_action('docker/metadata-action')}",
             "        id: metadata",
             "        with:",
             "          tags: |",
@@ -1761,7 +1952,7 @@ class App:
             '          sep-tags: " "',
             "",
             "      - name: Build Image",
-            "        uses: redhat-actions/buildah-build@v2",
+            f"        uses: {pinned_action('redhat-actions/buildah-build')}",
             "        with:",
             "          containerfiles: ./Containerfile",
             "          image: ${{ env.IMAGE_NAME }}",
@@ -1770,7 +1961,7 @@ class App:
             "          oci: false",
             "",
             "      - name: Login to GHCR",
-            "        uses: docker/login-action@v3",
+            f"        uses: {pinned_action('docker/login-action')}",
             "        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
             "        with:",
             "          registry: ghcr.io",
@@ -1778,7 +1969,7 @@ class App:
             "          password: ${{ secrets.GITHUB_TOKEN }}",
             "",
             "      - name: Push to GHCR",
-            "        uses: redhat-actions/push-to-registry@v2",
+            f"        uses: {pinned_action('redhat-actions/push-to-registry')}",
             "        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
             "        with:",
             "          registry: ${{ env.IMAGE_REGISTRY }}",
@@ -1792,7 +1983,7 @@ class App:
                 [
                     "",
                     "      - name: Install Cosign",
-                    "        uses: sigstore/cosign-installer@v3",
+                    f"        uses: {pinned_action('sigstore/cosign-installer')}",
                     f"        if: {sign_if}",
                     "",
                     "      - name: Sign container image",
@@ -1871,7 +2062,7 @@ class App:
             "          - recipe.yml",
             "    steps:",
             "      - name: Build Custom Image",
-            "        uses: blue-build/github-action@v1.11",
+            f"        uses: {pinned_action('blue-build/github-action')}",
             "        with:",
             "          recipe: ${{ matrix.recipe }}",
         ]
