@@ -52,11 +52,11 @@ class BaseImage:
 
 
 BASE_IMAGES: tuple[BaseImage, ...] = (
-    BaseImage("bazzite", "Bazzite", "Gaming-focused, SteamOS-like experience", "ghcr.io/ublue-os/bazzite:stable", "stable"),
-    BaseImage("aurora", "Aurora (KDE)", "KDE Plasma desktop, polished and productive", "ghcr.io/ublue-os/aurora:stable", "stable"),
-    BaseImage("aurora-dx", "Aurora DX", "Aurora with developer tools", "ghcr.io/ublue-os/aurora-dx:stable", "stable"),
-    BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop, clean and opinionated", "ghcr.io/ublue-os/bluefin:stable", "stable"),
-    BaseImage("bluefin-dx", "Bluefin DX", "Bluefin with developer tools", "ghcr.io/ublue-os/bluefin-dx:stable", "stable"),
+    BaseImage("bazzite", "Bazzite", "Best for gaming systems and handheld-style setups", "ghcr.io/ublue-os/bazzite:stable", "stable"),
+    BaseImage("aurora", "Aurora (KDE)", "KDE desktop for everyday use", "ghcr.io/ublue-os/aurora:stable", "stable"),
+    BaseImage("aurora-dx", "Aurora DX", "Aurora plus extra developer tools", "ghcr.io/ublue-os/aurora-dx:stable", "stable"),
+    BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop for everyday use", "ghcr.io/ublue-os/bluefin:stable", "stable"),
+    BaseImage("bluefin-dx", "Bluefin DX", "Bluefin plus extra developer tools", "ghcr.io/ublue-os/bluefin-dx:stable", "stable"),
 )
 
 CATALOGS: dict[str, list[str]] = {
@@ -593,6 +593,7 @@ class App:
     def choose_base_image(self) -> None:
         self.gum.header("Base Image")
         self.gum.hint("Pick the starting image you want to customize, then press Enter.")
+        self.gum.hint("DX means the image starts with extra developer tools already included.")
         print()
         if self.config.base_image_uri:
             matched = self.match_base_image(self.config.base_image_uri)
