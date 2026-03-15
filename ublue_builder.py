@@ -77,16 +77,6 @@ BASE_IMAGES: tuple[BaseImage, ...] = (
     BaseImage("bluefin-dx", "Bluefin DX", "Bluefin plus extra developer tools", "ghcr.io/ublue-os/bluefin-dx:stable"),
 )
 
-CATALOGS: dict[str, list[str]] = {
-    "Development": "gcc gcc-c++ make cmake git rust cargo golang nodejs python3-pip java-latest-openjdk meson ninja-build kernel-devel strace valgrind".split(),
-    "CLI Tools": "tmux zsh fish htop btop neovim vim-enhanced fzf ripgrep fd-find bat eza jq yq starship zoxide tldr just stow".split(),
-    "Networking": "tailscale wireguard-tools nmap tcpdump wireshark-cli curl wget net-tools bind-utils traceroute mtr iperf3 socat ncat".split(),
-    "Containers & VMs": "podman buildah skopeo distrobox toolbox cockpit cockpit-podman libvirt virt-manager qemu-kvm".split(),
-    "Multimedia": "ffmpeg vlc mpv ImageMagick yt-dlp".split(),
-    "Fonts": "google-noto-fonts-common google-noto-sans-fonts fira-code-fonts jetbrains-mono-fonts fontawesome-fonts".split(),
-    "Security": "keepassxc age gnupg2 openssh-clients openssh-server".split(),
-}
-
 COMMON_SERVICES: tuple[tuple[str, str], ...] = (
     ("SSH remote access", "sshd.service"),
     ("Tailscale VPN", "tailscaled.service"),
@@ -928,28 +918,26 @@ class App:
             self.gum.header("Software Selection")
         while True:
             self.gum.hint("Use the arrow keys to move and Enter to choose.")
+            self.gum.hint("Type package names manually when you know the RPM package name you want.")
             self.gum.hint("Choose Done when you are finished and want to keep going.")
             self.gum.hint(f"Current picks: {len(self.config.packages)} packages and {len(self.config.services)} services.")
             print()
             selection = self.gum.choose(
                 [
-                    "Browse package catalog",
                     "Type package names manually",
                     "Add a COPR repository",
                     "Add systemd services to enable",
                     "View current selections",
                     "Done",
                 ],
-                height=9,
+                height=8,
             )
             selected = selection[0] if selection else "Done"
             if selected == "Done":
                 self.config.normalize()
                 return
             try:
-                if selected == "Browse package catalog":
-                    self.select_from_catalog()
-                elif selected == "Type package names manually":
+                if selected == "Type package names manually":
                     self.manual_packages()
                 elif selected == "Add a COPR repository":
                     self.add_copr()
@@ -960,55 +948,13 @@ class App:
             except ScreenBack:
                 continue
 
-    def select_from_catalog(self) -> None:
-        while True:
-            self.gum.header("Package Catalog")
-            self.gum.hint("Choose a package group to browse.")
-            self.gum.hint("Press Esc to go back to the previous menu.")
-            print()
-            options = list(CATALOGS) + ["Back"]
-            try:
-                choice = self.gum.choose(options, height=10)
-            except ScreenBack:
-                return
-            selected = choice[0] if choice else "Back"
-            if selected == "Back":
-                return
-            if self.browse_catalog_group(selected):
-                return
-
-    def browse_catalog_group(self, group: str) -> bool:
-        # Multi-select keeps the visual state on screen. That is easier for
-        # beginners than the earlier "pick something, bounce back, hope it kept
-        # your choice" behavior.
-        self.gum.header(f"{group} Packages")
-        self.gum.hint("Press x to add or remove packages.")
-        self.gum.hint("Press Enter when you are finished. Press Esc to go back to the package groups.")
-        print()
-        current = [pkg for pkg in CATALOGS[group] if pkg in set(self.config.packages)]
-        try:
-            picked = self.gum.choose(
-                CATALOGS[group],
-                height=20,
-                no_limit=True,
-                selected=current,
-                header=group,
-                cursor_prefix="> ",
-                selected_prefix="[x] ",
-                unselected_prefix="[ ] ",
-            )
-        except ScreenBack:
-            return False
-        remaining = [pkg for pkg in self.config.packages if pkg not in CATALOGS[group]]
-        self.config.packages = unique([*remaining, *picked])
-        self.gum.success(f"Selected {len(picked)} package(s) from {group}.")
-        return True
-
     def manual_packages(self) -> None:
-        # Manual entry is still allowed, but we separate it from the curated
-        # catalog so beginners understand they are doing something less guided.
+        # Package entry is intentionally simple now: the user types the RPM
+        # package names they want, and the tool does a lightweight local check
+        # for obvious mistakes before the GitHub build does the final check.
         print()
         self.gum.hint("Enter RPM package names separated by spaces or newlines.")
+        self.gum.hint("You should know the RPM package name you want to install before adding it here.")
         self.gum.hint("This tool will try to catch obvious package-name mistakes here first.")
         self.gum.hint("The GitHub build is still the final check.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
@@ -1900,12 +1846,13 @@ class App:
         while True:
             self.gum.header("Edit Packages")
             self.gum.hint("Choose how you want to change packages.")
+            self.gum.hint("Use manual entry when you know the RPM package name you want.")
             self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
             print()
             try:
                 choice = self.gum.choose(
-                    ["Add packages from catalog", "Add packages manually", "Remove packages", "Back"],
-                    height=8,
+                    ["Add packages manually", "Remove packages", "Back"],
+                    height=7,
                 )
             except ScreenBack:
                 return
@@ -1913,9 +1860,7 @@ class App:
             if selected == "Back":
                 return
             try:
-                if selected == "Add packages from catalog":
-                    self.select_from_catalog()
-                elif selected == "Add packages manually":
+                if selected == "Add packages manually":
                     self.manual_packages()
                 elif selected == "Remove packages":
                     self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")

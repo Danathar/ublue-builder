@@ -407,37 +407,6 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.packages, [])
         self.assertEqual(app.gum.prompts, ["No packages were added. Press Enter to return to the package menu..."])
 
-    def test_browse_catalog_group_applies_selected_packages(self) -> None:
-        app = self.make_app()
-        app.config.packages = ["git"]
-
-        class GumStub:
-            def header(self, _title: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def choose(self, options, **_kwargs):
-                self.options = options
-                return ["tmux", "ripgrep"]
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def error(self, _message: str) -> None:
-                pass
-
-        app.gum = GumStub()
-        finished = app.browse_catalog_group("CLI Tools")
-        self.assertTrue(finished)
-        self.assertIn("tmux", app.config.packages)
-        self.assertIn("ripgrep", app.config.packages)
-        self.assertIn("git", app.config.packages)
-
     def test_select_common_services_replaces_curated_selection_only(self) -> None:
         app = self.make_app()
         app.config.services = ["custom.service", COMMON_SERVICES[0][1]]
