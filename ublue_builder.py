@@ -1938,15 +1938,16 @@ class App:
             self.config.services = self.choose_to_remove(self.config.services, "Remove Services")
 
     def manage_removed_packages(self) -> None:
-        self.gum.hint("Use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
+        self.gum.hint("These are packages you want removed from the base image.")
+        self.gum.hint("Choose Add to type package names to remove, or Remove to stop removing packages you already listed.")
+        self.gum.hint("Choose Back to return to the update menu. Changes are kept automatically.")
         print()
         try:
-            choice = self.gum.choose(["Add removed base packages", "Remove removed base packages", "Back"], height=5)
+            choice = self.gum.choose(["Add package names to remove", "Stop removing listed packages", "Back"], height=5)
         except ScreenBack:
             return
         selected = choice[0] if choice else "Back"
-        if selected == "Add removed base packages":
+        if selected == "Add package names to remove":
             self.gum.hint("Enter one package name per line. Leave this empty if you want to go back.")
             raw = self.gum.write(
                 placeholder="Enter package names, one per line...",
@@ -1955,7 +1956,7 @@ class App:
             )
             self.config.removed_packages.extend(line.strip() for line in raw.splitlines())
             self.config.normalize()
-        elif selected == "Remove removed base packages":
+        elif selected == "Stop removing listed packages":
             self.config.removed_packages = self.choose_to_remove(self.config.removed_packages, "Remove Base Package Removals")
 
     def push_update(self, owner: str, repo: str, repo_dir: Path) -> None:
