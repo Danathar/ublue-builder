@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 10):
+    raise SystemExit("Python 3.10 or newer is required.")
+
 from ublue_builder import App, CommandError, ScreenBack
 
 

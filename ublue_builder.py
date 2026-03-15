@@ -14,6 +14,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
+if sys.version_info < (3, 10):
+    raise SystemExit("Python 3.10 or newer is required.")
+
 VERSION = "0.8 beta"
 STATE_FILE = ".ublue-builder.json"
 DEFAULT_REPO_NAME = "my-ublue-image"

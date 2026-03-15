@@ -70,13 +70,13 @@ brew install gum gh cosign
 Run the beginner app:
 
 ```bash
-./ublue-builder.sh
+./ublue_builder.py
 ```
 
 Run the legacy import tool:
 
 ```bash
-./ublue-builder-import.sh
+./ublue_builder_import.py
 ```
 
 ## Project Scope
