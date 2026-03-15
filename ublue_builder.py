@@ -623,20 +623,21 @@ class App:
             raise SystemExit("git is required. Install it with: brew install git")
         self.gum.success("git found")
 
-        if command_exists("gh"):
-            if run(["gh", "auth", "status"], check=False).returncode == 0:
-                try:
-                    self.github_user = str(self.gh_json(["api", "user"])["login"])
-                    self.github_available = True
-                    self.config.github_user = self.github_user
-                    self.gum.success(f"GitHub CLI authenticated as: {self.github_user}")
-                except Exception:
-                    self.github_available = False
-                    self.gum.warn("GitHub CLI authenticated, but username lookup failed.")
-            else:
-                self.gum.warn("GitHub CLI found but not logged in.")
-        else:
-            self.gum.warn("GitHub CLI not found. Install it with: brew install gh")
+        if not command_exists("gh"):
+            raise SystemExit("GitHub CLI is required. Install it with: brew install gh")
+        if run(["gh", "auth", "status"], check=False).returncode != 0:
+            raise SystemExit("GitHub CLI is not logged in. Run: gh auth login")
+        try:
+            self.github_user = str(self.gh_json(["api", "user"])["login"])
+            self.github_available = True
+            self.config.github_user = self.github_user
+            self.gum.success(f"GitHub CLI authenticated as: {self.github_user}")
+        except Exception as exc:
+            self.github_available = False
+            raise SystemExit(
+                "GitHub CLI login was detected, but the account could not be read. "
+                "Try: gh auth status && gh auth login"
+            ) from exc
 
         if command_exists("cosign"):
             self.gum.success("cosign found (signed builds available)")

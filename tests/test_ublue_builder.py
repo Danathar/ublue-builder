@@ -165,6 +165,57 @@ class BuilderTests(unittest.TestCase):
                     with self.assertRaisesRegex(SystemExit, "brew install cosign"):
                         app.preflight()
 
+    def test_preflight_requires_github_cli(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def ensure_available(self) -> None:
+                pass
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def success(self, *_args, **_kwargs) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        def fake_exists(name: str) -> bool:
+            return name == "git"
+
+        with patch("ublue_builder.command_exists", side_effect=fake_exists):
+            with self.assertRaisesRegex(SystemExit, "GitHub CLI is required"):
+                app.preflight()
+
+    def test_preflight_requires_github_login(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def ensure_available(self) -> None:
+                pass
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def success(self, *_args, **_kwargs) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        def fake_exists(name: str) -> bool:
+            return name in {"git", "gh"}
+
+        with patch("ublue_builder.command_exists", side_effect=fake_exists):
+            with patch("ublue_builder.run", return_value=subprocess.CompletedProcess(["gh", "auth", "status"], 1, "", "")):
+                with self.assertRaisesRegex(SystemExit, "gh auth login"):
+                    app.preflight()
+
     def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
         app = self.make_app()
 
