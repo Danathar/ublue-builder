@@ -23,7 +23,6 @@ DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 MAX_UI_WIDTH = 120
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
-CONTAINERFILE_TEMPLATE_REV = "ec2ccf3b7683d8435a2611eb99d0b702102557b5"
 TEMPLATE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "template_snapshots"
 CONTAINERFILE_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "containerfile"
 ALLOWED_METHODS = {"containerfile"}
@@ -47,15 +46,14 @@ class BaseImage:
     name: str
     description: str
     image_uri: str
-    tag: str
 
 
 BASE_IMAGES: tuple[BaseImage, ...] = (
-    BaseImage("bazzite", "Bazzite", "Best for gaming systems and handheld-style setups", "ghcr.io/ublue-os/bazzite:stable", "stable"),
-    BaseImage("aurora", "Aurora (KDE)", "KDE desktop for everyday use", "ghcr.io/ublue-os/aurora:stable", "stable"),
-    BaseImage("aurora-dx", "Aurora DX", "Aurora plus extra developer tools", "ghcr.io/ublue-os/aurora-dx:stable", "stable"),
-    BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop for everyday use", "ghcr.io/ublue-os/bluefin:stable", "stable"),
-    BaseImage("bluefin-dx", "Bluefin DX", "Bluefin plus extra developer tools", "ghcr.io/ublue-os/bluefin-dx:stable", "stable"),
+    BaseImage("bazzite", "Bazzite", "Best for gaming systems and handheld-style setups", "ghcr.io/ublue-os/bazzite:stable"),
+    BaseImage("aurora", "Aurora (KDE)", "KDE desktop for everyday use", "ghcr.io/ublue-os/aurora:stable"),
+    BaseImage("aurora-dx", "Aurora DX", "Aurora plus extra developer tools", "ghcr.io/ublue-os/aurora-dx:stable"),
+    BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop for everyday use", "ghcr.io/ublue-os/bluefin:stable"),
+    BaseImage("bluefin-dx", "Bluefin DX", "Bluefin plus extra developer tools", "ghcr.io/ublue-os/bluefin-dx:stable"),
 )
 
 CATALOGS: dict[str, list[str]] = {
@@ -80,7 +78,6 @@ class Config:
     method: str = ""
     base_image_uri: str = ""
     base_image_name: str = ""
-    base_image_tag: str = ""
     repo_name: str = ""
     image_desc: str = "My custom Universal Blue image"
     packages: list[str] = field(default_factory=list)
@@ -89,7 +86,6 @@ class Config:
     removed_packages: list[str] = field(default_factory=list)
     signing_enabled: bool = False
     github_user: str = ""
-    scanned_base: str = ""
     scanned_packages: list[str] = field(default_factory=list)
     scanned_removed: list[str] = field(default_factory=list)
 
@@ -174,11 +170,9 @@ def config_from_state_payload(data: object) -> Config:
         "method",
         "base_image_uri",
         "base_image_name",
-        "base_image_tag",
         "repo_name",
         "image_desc",
         "github_user",
-        "scanned_base",
     }
     for name in list_fields:
         if name in data:
@@ -774,7 +768,6 @@ class App:
                 print()
                 self.config.base_image_uri = ""
                 self.config.base_image_name = ""
-                self.config.base_image_tag = ""
 
         options = [
             f"{image.name:<25} {image.description}  [{image.image_uri}]"
@@ -786,7 +779,6 @@ class App:
             if selected.startswith(image.name):
                 self.config.base_image_uri = image.image_uri
                 self.config.base_image_name = image.name
-                self.config.base_image_tag = image.tag
                 break
         self.gum.success(f"Base image: {self.config.base_image_name} ({self.config.base_image_uri})")
 
@@ -1129,19 +1121,16 @@ class App:
         ):
             if base.startswith(prefix):
                 base = base[len(prefix):]
-        self.config.scanned_base = base
         self.config.scanned_packages = unique(booted.get("requested-packages", []))
         self.config.scanned_removed = unique(booted.get("requested-base-removals", []))
         self.config.removed_packages = list(self.config.scanned_removed)
 
         self.config.base_image_uri = base
         self.config.base_image_name = base
-        self.config.base_image_tag = "latest"
         matched = self.match_base_image(base)
         if matched:
             self.config.base_image_uri = matched.image_uri
             self.config.base_image_name = matched.name
-            self.config.base_image_tag = matched.tag
 
         self.gum.header("Scan Results")
         rows = [
@@ -1276,14 +1265,6 @@ class App:
 
     def clone_container_template(self, target: Path) -> None:
         self.copy_template_snapshot(target, repo=CONTAINERFILE_TEMPLATE_REPO, source_dir=CONTAINERFILE_TEMPLATE_DIR)
-
-    def current_branch(self, repo_dir: Path) -> str:
-        proc = run(["git", "branch", "--show-current"], cwd=repo_dir)
-        branch = proc.stdout.strip()
-        if branch:
-            return branch
-        proc = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir)
-        return proc.stdout.strip() or "HEAD"
 
     def repo_default_branch(self, owner: str, repo: str) -> str:
         data = self.gh_json(["repo", "view", f"{owner}/{repo}", "--json", "defaultBranchRef"])
@@ -1626,10 +1607,8 @@ class App:
             matched = self.match_base_image(cfg.base_image_uri)
             if matched:
                 cfg.base_image_name = matched.name
-                cfg.base_image_tag = matched.tag
             else:
                 cfg.base_image_name = cfg.base_image_uri
-                cfg.base_image_tag = cfg.base_image_uri.rsplit(":", 1)[-1] if ":" in cfg.base_image_uri else "latest"
 
         build_sh = repo_dir / "build_files/build.sh"
         if not build_sh.exists():

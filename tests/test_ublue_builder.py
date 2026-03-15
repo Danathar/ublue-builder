@@ -26,7 +26,6 @@ class BuilderTests(unittest.TestCase):
             method="containerfile",
             base_image_uri="ghcr.io/ublue-os/bazzite:stable",
             base_image_name="Bazzite",
-            base_image_tag="stable",
             repo_name="test-image",
             image_desc="Test image",
             github_user="example",
