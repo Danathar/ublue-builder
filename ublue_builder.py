@@ -17,6 +17,17 @@ from typing import Iterable, Sequence
 if sys.version_info < (3, 10):
     raise SystemExit("Python 3.10 or newer is required.")
 
+# This file intentionally keeps the whole beginner-focused tool in one module.
+# The runtime model is:
+# 1. collect choices from the user into Config
+# 2. validate and normalize that Config
+# 3. write a canonical state file so future updates do not need fragile parsing
+# 4. render a GitHub repo from a pinned template snapshot plus generated files
+# 5. let GitHub Actions build and sign the image
+#
+# A future refactor could split UI, GitHub operations, and rendering into
+# separate modules, but the comments below aim to make the current layout easier
+# to understand for anyone reading it now.
 VERSION = "0.8 beta"
 STATE_FILE = ".ublue-builder.json"
 DEFAULT_REPO_NAME = "my-ublue-image"
@@ -26,9 +37,15 @@ CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 TEMPLATE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "template_snapshots"
 CONTAINERFILE_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "containerfile"
 ALLOWED_METHODS = {"containerfile"}
+# These regexes are our low-cost safety rails. They do not prove a package or
+# service is real, but they do stop obviously unsafe values from becoming shell
+# script content later.
 PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
 COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 SERVICE_TOKEN_RE = re.compile(r"^[A-Za-z0-9@._:+-]+$")
+# GitHub Actions should be pinned to immutable SHAs instead of floating tags.
+# The human-readable tag is kept as a comment so maintainers can still tell what
+# upstream version the pin came from.
 ACTION_PINS: dict[str, tuple[str, str]] = {
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6"),
     "ublue-os/remove-unwanted-software": ("695eb75bc387dbcd9685a8e72d23439d8686cba6", "v8"),
@@ -42,6 +59,9 @@ ACTION_PINS: dict[str, tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class BaseImage:
+    # This is the small curated image list shown to beginners. Keeping it as a
+    # dataclass instead of plain dicts gives the rest of the code typed fields
+    # and avoids magic string lookups.
     key: str
     name: str
     description: str
@@ -75,6 +95,9 @@ COMMON_SERVICES: tuple[tuple[str, str], ...] = (
 
 @dataclass
 class Config:
+    # Config is the single source of truth for what the user wants to build.
+    # Most of the app mutates this object in memory, then state_payload()
+    # serializes it to .ublue-builder.json before repo files are written.
     method: str = ""
     base_image_uri: str = ""
     base_image_name: str = ""
@@ -90,6 +113,8 @@ class Config:
     scanned_removed: list[str] = field(default_factory=list)
 
     def normalize(self) -> None:
+        # Every menu appends to lists over time. Normalizing here keeps ordering
+        # stable for humans while still removing duplicates and empty values.
         self.packages = unique(self.packages)
         self.copr_repos = unique(self.copr_repos)
         self.services = unique(self.services)
@@ -97,6 +122,8 @@ class Config:
 
 
 def unique(values: Iterable[str]) -> list[str]:
+    # This preserves first-seen order, which makes generated files and review
+    # screens stable and easier for users to reason about.
     seen: set[str] = set()
     output: list[str] = []
     for value in values:
@@ -108,11 +135,16 @@ def unique(values: Iterable[str]) -> list[str]:
 
 
 def sanitize_slug(value: str, default: str = DEFAULT_REPO_NAME) -> str:
+    # GitHub repo names cannot contain spaces, so we translate user-friendly
+    # input into a slug before running stricter validation.
     cleaned = re.sub(r"[^a-z0-9._-]", "-", value.lower()).strip("-")
     return cleaned or default
 
 
 def is_valid_repo_name(value: str) -> bool:
+    # Keep this aligned with the subset of GitHub naming rules we want to
+    # support in the beginner UI. We are intentionally stricter than necessary
+    # so error messages stay simple.
     if not value or len(value) > 100:
         return False
     if value.endswith(".git"):
@@ -123,6 +155,8 @@ def is_valid_repo_name(value: str) -> bool:
 
 
 def yaml_scalar(value: str) -> str:
+    # JSON string quoting is valid YAML 1.2 and saves us from bringing in a
+    # YAML library just to safely escape a single scalar value.
     return json.dumps(value)
 
 
@@ -139,6 +173,8 @@ def shell_quote(value: str) -> str:
 
 
 def validate_string_list(value: object, field_name: str) -> list[str]:
+    # State files are user-editable JSON. Strict type checks here keep a broken
+    # or hand-edited state file from turning into confusing runtime errors.
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list of strings")
     invalid = [item for item in value if not isinstance(item, str)]
@@ -148,6 +184,9 @@ def validate_string_list(value: object, field_name: str) -> list[str]:
 
 
 def config_from_state_payload(data: object) -> Config:
+    # Older repo updates depend on this loader being defensive. If the state
+    # file is wrong, we would rather fail loudly with a helpful message than
+    # quietly write a damaged repo back to GitHub.
     if not isinstance(data, dict):
         raise ValueError("state file must contain a JSON object")
     state_version = data.get("state_version")
@@ -195,6 +234,8 @@ def config_from_state_payload(data: object) -> Config:
 
 
 def pin_action_uses_line(line: str) -> str:
+    # When patching upstream workflow text, we rewrite "uses:" lines to pinned
+    # SHAs. This avoids supply-chain drift if an upstream tag ever changes.
     match = re.fullmatch(r"(\s*uses:\s+)([^@\s]+)@([^\s#]+)(.*)", line)
     if not match:
         return line
@@ -209,6 +250,8 @@ def pin_action_uses_line(line: str) -> str:
 
 
 def pinned_action(action: str) -> str:
+    # New workflows are generated directly from these pinned references instead
+    # of floating tags for the same reason as pin_action_uses_line().
     sha, label = ACTION_PINS[action]
     return f"{action}@{sha} # {label}"
 
@@ -230,6 +273,9 @@ def run(
     capture: bool = True,
     stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    # This is the single subprocess helper used by most of the file. Keeping
+    # command execution here centralizes our "raise CommandError with useful
+    # text" behavior instead of repeating it around the app.
     proc = subprocess.run(
         list(args),
         cwd=str(cwd) if cwd else None,
@@ -248,6 +294,11 @@ def run(
 
 
 class Gum:
+    # Gum is used as a lightweight TUI toolkit. This wrapper smooths out a few
+    # rough edges for the rest of the app:
+    # - it normalizes Ctrl+C vs Esc/back behavior
+    # - it computes widths consistently
+    # - it hides the exact gum command lines from the workflow code
     def terminal_width(self) -> int:
         return shutil.get_terminal_size((MAX_UI_WIDTH, 24)).columns
 
@@ -262,6 +313,9 @@ class Gum:
         return f"{left},{right}"
 
     def require_interactive_success(self, proc: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
+        # gum uses exit code 130 for Ctrl+C and non-zero for "cancel/back".
+        # Converting those to Python exceptions lets the rest of the app reason
+        # about navigation instead of raw exit codes.
         if proc.returncode == 130:
             raise KeyboardInterrupt()
         if proc.returncode != 0:
@@ -273,6 +327,9 @@ class Gum:
             run(["clear"], capture=False, check=False)
 
     def interactive_stdout(self, args: Sequence[str], *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        # We capture stdout for chooser/input widgets because that is how gum
+        # returns the selected value. stderr is left attached to the terminal so
+        # interactive drawing still appears on screen.
         return subprocess.run(
             list(args),
             input=stdin,
@@ -402,6 +459,8 @@ class Gum:
         run(["gum", "spin", "--spinner", "dot", "--title", title, "--", *command], cwd=cwd, capture=False)
 
     def spinner_capture(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> str:
+        # gum spin does not give us structured output directly, so we capture the
+        # command's stdout through a temporary file and then read it back.
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             output_path = tmp.name
         try:
@@ -416,6 +475,9 @@ class Gum:
             Path(output_path).unlink(missing_ok=True)
 
     def spinner_result(self, title: str, command: Sequence[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        # Same idea as spinner_capture(), but this version keeps stdout, stderr,
+        # and exit status so callers can inspect a command result after the
+        # spinner closes.
         with tempfile.NamedTemporaryFile(delete=False) as stdout_tmp:
             stdout_path = stdout_tmp.name
         with tempfile.NamedTemporaryFile(delete=False) as stderr_tmp:
@@ -447,6 +509,11 @@ class Gum:
 
 class App:
     def __init__(self) -> None:
+        # The app keeps a small amount of session state beyond Config:
+        # - GitHub login information discovered during preflight
+        # - whether a repo was loaded from canonical state or legacy parsing
+        # - temporary signing/public-key data while creating or updating a repo
+        # - memoized host package lookups so repeated manual checks are faster
         self.gum = Gum()
         self.config = Config()
         self.github_available = False
@@ -475,6 +542,9 @@ class App:
         )
 
     def startup_requirements(self) -> None:
+        # This screen exists because GitHub is not optional for the beginner
+        # tool. Telling users that up front is better than failing halfway
+        # through the wizard after they already entered data.
         print(
             self.gum.style(
                 "Before You Start",
@@ -501,10 +571,12 @@ class App:
         self.gum.clear()
 
     def gh_json(self, args: Sequence[str]) -> object:
+        # Small helper around "gh ... --json" style commands.
         proc = run(["gh", *args])
         return json.loads(proc.stdout or "null")
 
     def gh_json_with_spinner(self, title: str, args: Sequence[str]) -> object:
+        # Networked GitHub queries can feel frozen without a spinner.
         output = self.gum.spinner_capture(title, ["gh", *args])
         return json.loads(output or "null")
 
@@ -535,6 +607,8 @@ class App:
         ]
 
     def preflight(self) -> None:
+        # Preflight is intentionally blunt: it checks the tools this app depends
+        # on before we let the user invest time in the wizard.
         self.gum.ensure_available()
         self.gum.header("Preflight Checks", clear_screen=False)
         self.gum.hint("Checking required tools and the runtime environment...")
@@ -584,6 +658,8 @@ class App:
             return False
 
     def _require_github(self) -> bool:
+        # Many flows call this right before making networked changes. It either
+        # confirms GitHub is ready or walks the user through login first.
         if self.github_available and self.github_user:
             return True
         if not command_exists("gh"):
@@ -679,6 +755,8 @@ class App:
             raise SystemExit("GitHub login failed. Try: gh auth login")
 
     def main_menu(self) -> None:
+        # The main menu loops forever so the app drops the user back here after
+        # create/update flows instead of exiting after one action.
         while True:
             self.gum.header("Main Menu")
             self.gum.hint("Use the arrow keys to move and Enter to choose.")
@@ -710,6 +788,8 @@ class App:
                 continue
 
     def create_new_image(self, *, scanned: bool = False) -> None:
+        # This is a simple step-by-step wizard. "step" is an integer instead of
+        # a stack because the beginner flow is intentionally linear.
         self.config.method = "containerfile"
         total_steps = 4
         step = 1
@@ -747,6 +827,9 @@ class App:
                 return
 
     def choose_base_image(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        # Supported base images are intentionally limited. The point of this tool
+        # is a predictable beginner path, not every possible Universal Blue
+        # image variant.
         if step is not None and total_steps is not None:
             self.show_step_header("Base Image", step=step, total_steps=total_steps)
         else:
@@ -783,6 +866,8 @@ class App:
         self.gum.success(f"Base image: {self.config.base_image_name} ({self.config.base_image_uri})")
 
     def configure_repo(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        # We collect repo name and description together because those two values
+        # become both GitHub metadata and generated file content later.
         while True:
             if step is not None and total_steps is not None:
                 self.show_step_header("Repository Configuration", step=step, total_steps=total_steps)
@@ -818,6 +903,8 @@ class App:
             return
 
     def select_packages(self, *, step: int | None = None, total_steps: int | None = None) -> None:
+        # "Software" is a menu of smaller editing tasks. Each option mutates the
+        # same Config object, so the review screen can always show current state.
         if step is not None and total_steps is not None:
             self.show_step_header("Software Selection", step=step, total_steps=total_steps)
         else:
@@ -874,6 +961,9 @@ class App:
                 return
 
     def browse_catalog_group(self, group: str) -> bool:
+        # Multi-select keeps the visual state on screen. That is easier for
+        # beginners than the earlier "pick something, bounce back, hope it kept
+        # your choice" behavior.
         self.gum.header(f"{group} Packages")
         self.gum.hint("Press x to add or remove packages.")
         self.gum.hint("Press Enter when you are finished. Press Esc to go back to the package groups.")
@@ -898,6 +988,8 @@ class App:
         return True
 
     def manual_packages(self) -> None:
+        # Manual entry is still allowed, but we separate it from the curated
+        # catalog so beginners understand they are doing something less guided.
         print()
         self.gum.hint("Enter RPM package names separated by spaces or newlines.")
         self.gum.hint("This tool will try to catch obvious package-name mistakes here first.")
@@ -920,6 +1012,8 @@ class App:
         self.gum.enter_to_continue("No packages were added. Press Enter to return to the package menu...")
 
     def add_copr(self) -> None:
+        # COPR is powerful but advanced. The UI copy here tries to frame it as
+        # optional so new users do not feel forced to understand it immediately.
         self.gum.header("Add COPR Repository")
         self.gum.hint("COPR is an extra community package source outside the normal Fedora and Universal Blue repos.")
         self.gum.hint("Most users can skip this. Only use it if you know a package you need comes from that COPR.")
@@ -953,6 +1047,8 @@ class App:
         self.gum.hint("The GitHub build will confirm that the COPR repo and package names are valid.")
 
     def add_services(self) -> None:
+        # Service enabling is another advanced-ish option, so this menu starts
+        # with common examples before dropping to raw systemd unit names.
         while True:
             self.gum.header("Enable Services")
             self.gum.hint("Services are background features that start automatically when the image boots.")
@@ -1037,6 +1133,8 @@ class App:
         total_steps: int | None = None,
         next_hint: str | None = None,
     ) -> None:
+        # The summary deliberately shows counts for list-like data instead of
+        # dumping huge tables. Full details can be reviewed in the edit screens.
         if step is not None and total_steps is not None:
             self.show_step_header(
                 "Review Build Configuration",
@@ -1062,6 +1160,8 @@ class App:
         self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
+        # We separate the read-only summary from the action menu because small
+        # terminals can otherwise bury the prompt below the table.
         self.show_summary(step=step, total_steps=total_steps)
         self.gum.enter_to_continue("Press Enter to continue...")
         self.gum.header("Choose Next Step")
@@ -1088,6 +1188,9 @@ class App:
         return "cancel"
 
     def scan_os(self) -> bool:
+        # This is the one place where the beginner tool looks at the running
+        # host. It only reads rpm-ostree state so it can carry layered packages
+        # and base-package removals into a new GitHub-backed image repo.
         self.gum.header("Scanning Running OS")
         if not command_exists("rpm-ostree"):
             self.gum.error("rpm-ostree not found. OS scanning is unavailable.")
@@ -1112,6 +1215,9 @@ class App:
             or booted.get("origin")
             or ""
         )
+        # rpm-ostree reports image origins with different prefixes depending on
+        # how the deployment was created. We strip those to get a consistent
+        # image reference that can be matched against our supported base list.
         base = container_ref
         for prefix in (
             "ostree-image-signed:docker://",
@@ -1193,6 +1299,8 @@ class App:
         return None
 
     def repo_secret_exists(self, owner: str, repo: str, secret_name: str) -> bool:
+        # We probe for the secret before trying to generate or upload a new key.
+        # That keeps updates idempotent and avoids silently rotating keys.
         if not command_exists("gh"):
             return False
         proc = run(["gh", "secret", "list", "-R", f"{owner}/{repo}"], check=False)
@@ -1217,6 +1325,9 @@ class App:
         return (repo_dir / "Containerfile").exists() and build_script_exists
 
     def ensure_signing_ready(self, owner: str, repo: str) -> bool:
+        # Signed images are required for this tool, so "ready" means:
+        # - the repo already has SIGNING_SECRET, or
+        # - we can create a cosign keypair and upload the private key now
         self.generated_cosign_pub = None
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
             return True
@@ -1243,6 +1354,8 @@ class App:
             if secret_proc.returncode != 0:
                 raise CommandError("Unable to upload SIGNING_SECRET to GitHub. Check your gh login and repo access, then try again.")
             self.generated_cosign_pub = pub_path.read_text()
+        # The public key is kept in memory for the current run so it can be
+        # written into the repo files that we are about to generate.
         self.gum.success("Configured SIGNING_SECRET for image signing.")
         return True
 
@@ -1250,6 +1363,9 @@ class App:
         self.gum.spinner(f"Cloning {owner}/{repo}...", ["gh", "repo", "clone", f"{owner}/{repo}", str(target)])
 
     def copy_template_snapshot(self, target: Path, *, repo: str, source_dir: Path) -> None:
+        # We copy from a bundled snapshot instead of pulling a live template from
+        # GitHub at runtime. That makes the tool deterministic and avoids breakage
+        # if upstream template repos change unexpectedly.
         target = target.expanduser()
         target.parent.mkdir(parents=True, exist_ok=True)
         if not source_dir.is_dir():
@@ -1309,6 +1425,11 @@ class App:
         return True
 
     def filter_available_manual_packages(self, packages: Sequence[str]) -> list[str]:
+        # Manual package entry is intentionally forgiving:
+        # - known good packages are accepted
+        # - clearly missing packages are skipped
+        # - unknown/uncheckable cases are kept, but the user is warned that the
+        #   GitHub build is the final authority
         self.last_manual_package_check_had_missing = False
         accepted: list[str] = []
         missing: list[str] = []
@@ -1336,6 +1457,9 @@ class App:
         return accepted
 
     def lookup_host_package(self, package: str) -> bool | None:
+        # Host-side dnf5 checks are a lightweight "spellcheck" for manual RPM
+        # names. They are not a perfect model of the final image build, but they
+        # catch obvious mistakes like typos before we create a repo.
         if package in self.package_lookup_cache:
             return self.package_lookup_cache[package]
         if not command_exists("dnf5"):
@@ -1381,6 +1505,8 @@ class App:
         return None
 
     def do_build(self) -> bool:
+        # "Build" in this app really means "create or update the GitHub repo that
+        # will trigger the real build on GitHub Actions."
         if not self.require_github():
             return False
         owner = self.github_user
@@ -1407,6 +1533,8 @@ class App:
 
             with tempfile.TemporaryDirectory(prefix="ublue-builder.") as tmp:
                 tmpdir = Path(tmp)
+                # We build the initial commit locally from our bundled template
+                # snapshot and only then push it to the brand-new remote repo.
                 self.seed_project_template(tmpdir)
                 branch = self.repo_default_branch(owner, repo)
                 run(["git", "init", "-b", branch], cwd=tmpdir)
@@ -1418,6 +1546,9 @@ class App:
                 pushed = True
         except Exception:
             if not pushed:
+                # Repo creation is the only irreversible network step before the
+                # first push. If anything later fails, we delete that empty repo
+                # so the user can retry cleanly instead of dealing with leftovers.
                 self.gum.warn("Setup failed after the GitHub repo was created. Removing the empty repo so you can try again cleanly.")
                 run(["gh", "repo", "delete", f"{owner}/{repo}", "--yes"], check=False, capture=False)
             raise
@@ -1451,6 +1582,9 @@ class App:
         return True
 
     def select_repo(self, *, require_state_file: bool = False) -> tuple[str, str]:
+        # This helper centralizes repo picking for update/import flows. The
+        # require_state_file flag is what prevents the normal update path from
+        # accidentally operating on unrelated repos.
         if not self.require_github():
             raise ScreenBack()
         repos = self.gh_json_with_spinner(
@@ -1498,6 +1632,8 @@ class App:
         raise SystemExit("No repository selected.")
 
     def update_existing_image(self) -> None:
+        # Update is deliberately limited to repos that already have the tool's
+        # canonical state file. Legacy repos must go through the import tool.
         if not self.require_github():
             return
         try:
@@ -1523,6 +1659,9 @@ class App:
                 self.push_update(owner, repo, tmpdir)
 
     def import_legacy_repo(self) -> None:
+        # Import is the "adopt an existing repo" escape hatch. It is kept
+        # separate from normal update flow because it relies on heuristic parsing
+        # and is inherently riskier than loading canonical state.
         if not self.require_github():
             return
         try:
@@ -1561,6 +1700,8 @@ class App:
             self.push_update(owner, repo, tmpdir)
 
     def load_repo_config(self, repo_dir: Path) -> None:
+        # Prefer the canonical JSON state file whenever possible. That is what
+        # lets update flows be stable instead of reparsing generated shell.
         self.used_legacy_import = False
         state_path = repo_dir / STATE_FILE
         if state_path.exists():
@@ -1598,6 +1739,9 @@ class App:
         self.config.normalize()
 
     def import_legacy_containerfile(self, repo_dir: Path) -> Config:
+        # This parser is intentionally simple and only meant for old repos that
+        # broadly match the layouts this project used to generate. That is why
+        # import remains a dedicated advanced flow instead of the default.
         cfg = Config(method="containerfile")
         containerfile = repo_dir / "Containerfile"
         if containerfile.exists():
@@ -1664,6 +1808,8 @@ class App:
         return cfg
 
     def update_menu(self) -> bool:
+        # Update uses a task-list style menu instead of the linear create wizard,
+        # because returning users usually want to jump straight to one section.
         while True:
             self.gum.header("Update Image")
             self.gum.hint("Choose a section to review or change.")
@@ -1832,6 +1978,8 @@ class App:
             self.config.removed_packages = self.choose_to_remove(self.config.removed_packages, "Remove Base Package Removals")
 
     def push_update(self, owner: str, repo: str, repo_dir: Path) -> None:
+        # The update path rewrites files in a temporary clone, shows the diff,
+        # and only then asks for confirmation before pushing.
         self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
         self.write_project_files(repo_dir, include_workflow=True)
         diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
@@ -1861,12 +2009,17 @@ class App:
         return f"{hint}\n\n{body}\n"
 
     def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
+        # Validation happens before generating shell/YAML so bad values fail here
+        # instead of turning into broken repo files or command injection risks.
         invalid = [value for value in values if not pattern.fullmatch(value)]
         if invalid:
             sample = ", ".join(invalid[:3])
             raise CommandError(f"Invalid {label} value(s): {sample}")
 
     def validate_config(self) -> None:
+        # This is the final safety gate before any files are rendered or pushed.
+        # It combines structural checks (repo name, base image) with token-level
+        # checks for anything that will land in scripts or workflows.
         self.config.normalize()
         if self.config.method not in ALLOWED_METHODS:
             raise CommandError("Choose a supported build method before writing project files.")
@@ -1884,6 +2037,8 @@ class App:
             )
 
     def state_payload(self) -> dict[str, object]:
+        # The JSON state file is the canonical source of truth for future
+        # updates. Generated files are considered outputs, not the primary state.
         self.validate_config()
         payload = asdict(self.config)
         payload["tool_version"] = VERSION
@@ -1891,6 +2046,8 @@ class App:
         return payload
 
     def render_containerfile(self, existing_text: str | None = None) -> str:
+        # If the template already has a Containerfile, only replace the FROM line
+        # so we preserve upstream formatting and comments where possible.
         if existing_text:
             lines = existing_text.splitlines()
             for index, line in enumerate(lines):
@@ -1900,6 +2057,8 @@ class App:
         return self.generate_containerfile()
 
     def patch_container_justfile(self, existing_text: str) -> str:
+        # The template Justfile already has sensible defaults; we only patch the
+        # image name so the local build target matches the chosen repo name.
         updated = re.sub(
             r'^export image_name := env\("IMAGE_NAME",\s*"[^"]*"\)(.*)$',
             f'export image_name := env("IMAGE_NAME", "{self.config.repo_name}")\\1',
@@ -1910,6 +2069,9 @@ class App:
         return ensure_trailing_newline(updated)
 
     def patch_container_readme(self, existing_text: str) -> str:
+        # README patching stays intentionally narrow. We adjust the parts users
+        # expect to reflect their choices instead of regenerating the whole file
+        # if an upstream template already provided one.
         lines = existing_text.splitlines()
         for index, line in enumerate(lines):
             if line.startswith("# "):
@@ -1921,6 +2083,11 @@ class App:
         return ensure_trailing_newline(updated)
 
     def patch_container_workflow(self, existing_text: str) -> str:
+        # This patcher updates the bundled template workflow in place. The main
+        # goals are:
+        # - pin actions to SHAs
+        # - keep our state file out of push triggers
+        # - wire in image description and signing conditions safely
         branch_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
         sign_if = f"{branch_if} && env.COSIGN_PRIVATE_KEY != ''"
         lines = existing_text.splitlines()
@@ -1970,6 +2137,9 @@ class App:
         return ensure_trailing_newline(text)
 
     def write_container_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+        # This is the "materialize the repo" step for Containerfile mode. It
+        # patches template-owned files where possible and generates tool-owned
+        # files where needed.
         readme_path = base_dir / "README.md"
         gitignore_path = base_dir / ".gitignore"
         justfile_path = base_dir / "Justfile"
@@ -2007,12 +2177,16 @@ class App:
                 workflow_path.write_text(self.generate_container_workflow())
 
     def write_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+        # Always write the canonical state file first. That way the repo can be
+        # updated later even if a human edits generated files by hand.
         self.validate_config()
         base_dir.mkdir(parents=True, exist_ok=True)
         (base_dir / STATE_FILE).write_text(json.dumps(self.state_payload(), indent=2) + "\n")
         self.write_container_project_files(base_dir, include_workflow=include_workflow)
 
     def generate_containerfile(self) -> str:
+        # The Containerfile is intentionally small. Most customization lives in
+        # build_files/build.sh so users can inspect a simpler mutation layer.
         return textwrap.dedent(
             f"""\
             FROM scratch AS ctx
@@ -2031,6 +2205,8 @@ class App:
         )
 
     def generate_build_sh(self) -> str:
+        # build.sh is where user selections become actual package/service
+        # changes inside the image. Values are shell-quoted before this point.
         lines = ["#!/bin/bash", "", "set -ouex pipefail", ""]
         if self.config.copr_repos:
             lines.append("# Enable COPR repositories")
@@ -2066,6 +2242,8 @@ class App:
         return "\n".join(lines).rstrip() + "\n"
 
     def generate_container_workflow(self) -> str:
+        # This is the GitHub Actions workflow for repos generated from scratch
+        # instead of patched from an existing template copy.
         sign_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.COSIGN_PRIVATE_KEY != ''"
         lines = [
             "---",
@@ -2175,6 +2353,9 @@ class App:
         return "\n".join(lines).rstrip() + "\n"
 
     def generate_readme(self) -> str:
+        # The generated project README is intentionally brief and practical:
+        # what base image was chosen, what packages were added, and how to use
+        # the resulting image once GitHub finishes building it.
         owner = self.config.github_user or "your-user"
         image_ref = f"ghcr.io/{owner}/{self.config.repo_name}:latest"
         packages = "\n".join(f"- `{pkg}`" for pkg in self.config.packages) or "- _(customize later)_"
@@ -2232,6 +2413,9 @@ class App:
         return "\n".join(sections).rstrip() + "\n"
 
     def generate_justfile(self) -> str:
+        # just is included by the upstream template ecosystem, so we keep a tiny
+        # helper target for local builds even though this beginner tool no longer
+        # manages local-install workflows itself.
         return textwrap.dedent(
             f"""\
             export image_name := env("IMAGE_NAME", "{self.config.repo_name}")
