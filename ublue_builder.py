@@ -524,6 +524,11 @@ class App:
         self.package_lookup_warning_shown = False
         self.last_manual_package_check_had_missing = False
 
+    def fresh_config(self) -> Config:
+        # Starting a new create/scan flow should not inherit stale repo names or
+        # package picks from the previous action the user ran in this session.
+        return Config(method="containerfile", github_user=self.github_user)
+
     def banner(self) -> None:
         print(
             self.gum.style(
@@ -790,7 +795,11 @@ class App:
     def create_new_image(self, *, scanned: bool = False) -> None:
         # This is a simple step-by-step wizard. "step" is an integer instead of
         # a stack because the beginner flow is intentionally linear.
-        self.config.method = "containerfile"
+        if scanned:
+            self.config.method = "containerfile"
+            self.config.github_user = self.github_user
+        else:
+            self.config = self.fresh_config()
         total_steps = 4
         step = 1
         while True:
@@ -1191,6 +1200,7 @@ class App:
         # This is the one place where the beginner tool looks at the running
         # host. It only reads rpm-ostree state so it can carry layered packages
         # and base-package removals into a new GitHub-backed image repo.
+        self.config = self.fresh_config()
         self.gum.header("Scanning Running OS")
         if not command_exists("rpm-ostree"):
             self.gum.error("rpm-ostree not found. OS scanning is unavailable.")
@@ -1587,49 +1597,59 @@ class App:
         # accidentally operating on unrelated repos.
         if not self.require_github():
             raise ScreenBack()
-        repos = self.gh_json_with_spinner(
-            "Fetching repositories from GitHub...",
-            ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
-        )
-        if require_state_file:
-            self.gum.hint("Checking which repos were created by this tool...")
-            repos = [item for item in repos if self.repo_has_state_file(self.github_user, item["name"])]
-        if not repos:
+        while True:
+            repos = self.gh_json_with_spinner(
+                "Fetching repositories from GitHub...",
+                ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
+            )
             if require_state_file:
-                raise SystemExit("I couldn't find any GitHub repos on your account that were created by this tool yet.")
-            raise SystemExit("No repositories found on your GitHub account.")
-        labels: list[str] = []
-        mapping: dict[str, tuple[str, str]] = {}
-        for item in repos:
-            description = item.get("description") or "(no description)"
-            if len(description) > 40:
-                description = description[:37] + "..."
-            label = f"{item['name']:<30} {description}"
-            labels.append(label)
-            mapping[label] = (self.github_user, item["name"])
-        manual_label = "Type a repository name manually"
-        labels.append(manual_label)
-        self.gum.hint("Type to search, then use the arrow keys to move and Enter to choose.")
-        self.gum.hint("Choose the last option if you want to type a repository name yourself.")
-        print()
-        choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
-        if choice == manual_label:
-            repo = sanitize_slug(
-                self.gum.input(
+                self.gum.hint("Checking which repos were created by this tool...")
+                repos = [item for item in repos if self.repo_has_state_file(self.github_user, item["name"])]
+            if not repos:
+                if require_state_file:
+                    raise SystemExit("I couldn't find any GitHub repos on your account that were created by this tool yet.")
+                raise SystemExit("No repositories found on your GitHub account.")
+            labels: list[str] = []
+            mapping: dict[str, tuple[str, str]] = {}
+            for item in repos:
+                description = item.get("description") or "(no description)"
+                if len(description) > 40:
+                    description = description[:37] + "..."
+                label = f"{item['name']:<30} {description}"
+                labels.append(label)
+                mapping[label] = (self.github_user, item["name"])
+            manual_label = "Type a repository name manually"
+            labels.append(manual_label)
+            self.gum.hint("Type to search, then use the arrow keys to move and Enter to choose.")
+            self.gum.hint("Choose the last option if you want to type a repository name yourself.")
+            print()
+            choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
+            if choice == manual_label:
+                repo_input = self.gum.input(
                     prompt="Repository name: ",
                     placeholder=DEFAULT_REPO_NAME,
                     width=self.gum.form_width(max_width=72),
-                )
-            )
-            self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name"])
-            if require_state_file and not self.repo_has_state_file(self.github_user, repo):
-                raise CommandError(
-                    f"{self.github_user}/{repo} was not created by this tool. Use 'Import Legacy Repo' first if you want to manage it here."
-                )
-            return self.github_user, repo
-        if choice in mapping:
-            return mapping[choice]
-        raise SystemExit("No repository selected.")
+                ).strip()
+                if not repo_input:
+                    continue
+                repo = sanitize_slug(repo_input)
+                try:
+                    self.gh_json(["repo", "view", f"{self.github_user}/{repo}", "--json", "name"])
+                except CommandError:
+                    self.gum.error(f"{self.github_user}/{repo} was not found on GitHub.")
+                    self.gum.enter_to_continue("Press Enter to choose a different repository...")
+                    continue
+                if require_state_file and not self.repo_has_state_file(self.github_user, repo):
+                    self.gum.error(
+                        f"{self.github_user}/{repo} was not created by this tool."
+                    )
+                    self.gum.hint("Use 'Import Legacy Repo' first if you want to manage it here.")
+                    self.gum.enter_to_continue("Press Enter to choose a different repository...")
+                    continue
+                return self.github_user, repo
+            if choice in mapping:
+                return mapping[choice]
+            raise SystemExit("No repository selected.")
 
     def update_existing_image(self) -> None:
         # Update is deliberately limited to repos that already have the tool's
@@ -1847,8 +1867,16 @@ class App:
                 if task == "Packages":
                     self.manage_packages()
                 elif task == "Base image":
+                    previous_base_uri = self.config.base_image_uri
+                    previous_base_name = self.config.base_image_name
                     self.config.base_image_uri = ""
-                    self.choose_base_image()
+                    self.config.base_image_name = ""
+                    try:
+                        self.choose_base_image()
+                    except ScreenBack:
+                        self.config.base_image_uri = previous_base_uri
+                        self.config.base_image_name = previous_base_name
+                        raise
                 elif task == "Description":
                     self.edit_description()
                 elif task == "COPR repositories":

@@ -1,3 +1,4 @@
+import json
 import subprocess
 import tempfile
 import textwrap
@@ -457,6 +458,152 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaisesRegex(CommandError, "signing failed"):
                     app.do_build()
         self.assertIn(["gh", "repo", "delete", "example/test-image", "--yes"], run_calls)
+
+    def test_create_new_image_starts_from_fresh_config(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.packages = ["tmux"]
+        app.config.services = ["sshd.service"]
+        app.config.repo_name = "old-repo"
+        seen: dict[str, object] = {}
+
+        def fake_choose_base_image(**_kwargs):
+            seen["packages"] = list(app.config.packages)
+            seen["services"] = list(app.config.services)
+            seen["repo_name"] = app.config.repo_name
+            seen["github_user"] = app.config.github_user
+            raise ScreenBack()
+
+        with patch.object(app, "choose_base_image", side_effect=fake_choose_base_image):
+            app.create_new_image()
+
+        self.assertEqual(seen["packages"], [])
+        self.assertEqual(seen["services"], [])
+        self.assertEqual(seen["repo_name"], "")
+        self.assertEqual(seen["github_user"], "example")
+
+    def test_scan_os_resets_stale_config_before_loading_host_state(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.packages = ["old-package"]
+        app.config.removed_packages = ["old-removal"]
+
+        class GumStub:
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def table(self, *_args, **_kwargs) -> None:
+                pass
+
+            def error(self, *_args, **_kwargs) -> None:
+                pass
+
+            def warn(self, *_args, **_kwargs) -> None:
+                pass
+
+            def confirm(self, *_args, **_kwargs) -> bool:
+                return True
+
+            def table_widths(self, *_args, **_kwargs) -> str:
+                return "20,40"
+
+        status_payload = json.dumps(
+            {
+                "deployments": [
+                    {
+                        "booted": True,
+                        "container-image-reference": "docker://ghcr.io/ublue-os/bazzite:stable",
+                        "requested-packages": [],
+                        "requested-base-removals": [],
+                    }
+                ]
+            }
+        )
+        app.gum = GumStub()
+        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
+            with patch(
+                "ublue_builder.run",
+                return_value=subprocess.CompletedProcess(["rpm-ostree", "status", "--json", "--booted"], 0, status_payload, ""),
+            ):
+                result = app.scan_os()
+
+        self.assertTrue(result)
+        self.assertEqual(app.config.packages, [])
+        self.assertEqual(app.config.removed_packages, [])
+        self.assertEqual(app.config.base_image_name, "Bazzite")
+        self.assertEqual(app.config.github_user, "example")
+
+    def test_select_repo_manual_entry_recovers_after_missing_repo(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        manual_label = "Type a repository name manually"
+        existing_label = f"{'existing-repo':<30} (no description)"
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.errors: list[str] = []
+                self.prompts: list[str] = []
+                self.filters = [manual_label, existing_label]
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def form_width(self, **_kwargs) -> int:
+                return 72
+
+            def filter(self, _options, **_kwargs) -> str:
+                return self.filters.pop(0)
+
+            def input(self, **_kwargs) -> str:
+                return "missing repo"
+
+            def error(self, message: str) -> None:
+                self.errors.append(message)
+
+            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
+                self.prompts.append(placeholder)
+
+        app.gum = GumStub()
+        with patch.object(
+            app,
+            "gh_json_with_spinner",
+            return_value=[{"name": "existing-repo", "description": None}],
+        ):
+            with patch.object(app, "gh_json", side_effect=[CommandError("not found")]):
+                owner, repo = app.select_repo()
+
+        self.assertEqual((owner, repo), ("example", "existing-repo"))
+        self.assertTrue(any("missing-repo" in message for message in app.gum.errors))
+        self.assertEqual(app.gum.prompts, ["Press Enter to choose a different repository..."])
+
+    def test_update_menu_restores_base_image_when_cancelled(self) -> None:
+        app = self.make_app()
+        base_choice = app.format_task_choice("Base image", "Bazzite")
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.choices = [base_choice, "Cancel and go back"]
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def choose(self, _options, **_kwargs):
+                return [self.choices.pop(0)]
+
+        app.gum = GumStub()
+        with patch.object(app, "choose_base_image", side_effect=ScreenBack()):
+            result = app.update_menu()
+
+        self.assertFalse(result)
+        self.assertEqual(app.config.base_image_uri, "ghcr.io/ublue-os/bazzite:stable")
+        self.assertEqual(app.config.base_image_name, "Bazzite")
 
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
