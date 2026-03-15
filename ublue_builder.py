@@ -2382,24 +2382,6 @@ class App:
         copr_repos = "\n".join(f"- `{repo}`" for repo in self.config.copr_repos) or "- None."
         services = "\n".join(f"- `{service}`" for service in self.config.services) or "- None."
         removed_packages = "\n".join(f"- `{pkg}`" for pkg in self.config.removed_packages) or "- None."
-        if self.config.github_user:
-            clone_block = textwrap.dedent(
-                f"""\
-                ```bash
-                git clone https://github.com/{owner}/{self.config.repo_name}
-                cd {self.config.repo_name}
-                just build
-                """
-            ).strip()
-        else:
-            clone_block = textwrap.dedent(
-                f"""\
-                ```bash
-                cd {self.config.repo_name}
-                just build
-                ```
-                """
-            ).strip()
         sections = [
             f"# Custom {base_name} Image",
             "",
@@ -2439,10 +2421,6 @@ class App:
             f"sudo bootc switch {image_ref}",
             "systemctl reboot",
             "```",
-            "",
-            "## Local Build",
-            "",
-            clone_block,
         ]
         return "\n".join(sections).rstrip() + "\n"
 

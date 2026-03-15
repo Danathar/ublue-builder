@@ -764,6 +764,8 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("| Base Image | `Bazzite` |", readme)
         self.assertIn("- `tmux`", readme)
         self.assertIn("- `ripgrep`", readme)
+        self.assertNotIn("## Local Build", readme)
+        self.assertNotIn("just build", readme)
 
     def test_write_project_files_updates_readme_when_config_changes(self) -> None:
         app = self.make_app()
