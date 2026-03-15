@@ -2098,20 +2098,6 @@ class App:
         )
         return ensure_trailing_newline(updated)
 
-    def patch_container_readme(self, existing_text: str) -> str:
-        # README patching stays intentionally narrow. We adjust the parts users
-        # expect to reflect their choices instead of regenerating the whole file
-        # if an upstream template already provided one.
-        lines = existing_text.splitlines()
-        for index, line in enumerate(lines):
-            if line.startswith("# "):
-                lines[index] = f"# {self.config.repo_name}"
-                break
-        owner = self.config.github_user or "<username>"
-        image_ref = f"ghcr.io/{owner}/{self.config.repo_name}"
-        updated = "\n".join(lines).replace("ghcr.io/<username>/<image_name>", image_ref)
-        return ensure_trailing_newline(updated)
-
     def patch_container_workflow(self, existing_text: str) -> str:
         # This patcher updates the bundled template workflow in place. The main
         # goals are:
@@ -2176,10 +2162,7 @@ class App:
         containerfile_path = base_dir / "Containerfile"
         workflow_path = base_dir / ".github/workflows/build.yml"
 
-        if readme_path.exists():
-            readme_path.write_text(self.patch_container_readme(readme_path.read_text()))
-        else:
-            readme_path.write_text(self.generate_readme())
+        readme_path.write_text(self.generate_readme())
 
         existing_gitignore = gitignore_path.read_text().splitlines() if gitignore_path.exists() else []
         for entry in ["cosign.key", "_build*/", "output/"]:
@@ -2386,37 +2369,25 @@ class App:
         # The generated project README is intentionally brief and practical:
         # what base image was chosen, what packages were added, and how to use
         # the resulting image once GitHub finishes building it.
+        base_name = self.config.base_image_name or self.config.base_image_uri
         owner = self.config.github_user or "your-user"
         image_ref = f"ghcr.io/{owner}/{self.config.repo_name}:latest"
-        packages = "\n".join(f"- `{pkg}`" for pkg in self.config.packages) or "- _(customize later)_"
+        packages = "\n".join(f"- `{pkg}`" for pkg in self.config.packages) or "- None selected yet."
+        copr_repos = "\n".join(f"- `{repo}`" for repo in self.config.copr_repos) or "- None."
+        services = "\n".join(f"- `{service}`" for service in self.config.services) or "- None."
+        removed_packages = "\n".join(f"- `{pkg}`" for pkg in self.config.removed_packages) or "- None."
         if self.config.github_user:
-            usage_block = textwrap.dedent(
+            clone_block = textwrap.dedent(
                 f"""\
-                ## Usage
-
-                ```bash
-                sudo bootc switch {image_ref}
-                systemctl reboot
-                ```
-                """
-            ).strip()
-            local_block = textwrap.dedent(
-                f"""\
-                ## Local Build
-
                 ```bash
                 git clone https://github.com/{owner}/{self.config.repo_name}
                 cd {self.config.repo_name}
                 just build
-                ```
                 """
             ).strip()
         else:
-            usage_block = ""
-            local_block = textwrap.dedent(
+            clone_block = textwrap.dedent(
                 f"""\
-                ## Local Build
-
                 ```bash
                 cd {self.config.repo_name}
                 just build
@@ -2424,22 +2395,49 @@ class App:
                 """
             ).strip()
         sections = [
-            f"# {self.config.repo_name}",
+            f"# Custom {base_name} Image",
             "",
-            "Custom Universal Blue image built with **Containerfile**.",
+            self.config.image_desc,
+            "",
+            "This repository builds a custom Universal Blue image on GitHub Actions.",
             "",
             "| Setting | Value |",
             "|---------|-------|",
-            f"| Base | `{self.config.base_image_uri}` |",
-            "| Method | Containerfile |",
+            f"| Repository | `{owner}/{self.config.repo_name}` |",
+            f"| Base Image | `{base_name}` |",
+            f"| Base Image URI | `{self.config.base_image_uri}` |",
+            f"| Published Image | `{image_ref}` |",
+            "| Build Method | `Containerfile` |",
             "",
             "## Installed Packages",
             "",
             packages,
+            "",
+            "## COPR Repositories",
+            "",
+            copr_repos,
+            "",
+            "## Enabled Services",
+            "",
+            services,
+            "",
+            "## Removed Base Packages",
+            "",
+            removed_packages,
+            "",
+            "## Using The Image",
+            "",
+            "After the first successful GitHub Actions build finishes, switch to it with:",
+            "",
+            "```bash",
+            f"sudo bootc switch {image_ref}",
+            "systemctl reboot",
+            "```",
+            "",
+            "## Local Build",
+            "",
+            clone_block,
         ]
-        if usage_block:
-            sections.extend(["", usage_block])
-        sections.extend(["", local_block])
         return "\n".join(sections).rstrip() + "\n"
 
     def generate_justfile(self) -> str:

@@ -755,6 +755,33 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("      COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}", patched)
         self.assertIn("      FOO: bar", patched)
 
+    def test_generate_readme_uses_custom_base_title_and_lists_packages(self) -> None:
+        app = self.make_app()
+        app.config.base_image_name = "Bazzite"
+        app.config.packages = ["tmux", "ripgrep"]
+        readme = app.generate_readme()
+        self.assertIn("# Custom Bazzite Image", readme)
+        self.assertIn("| Base Image | `Bazzite` |", readme)
+        self.assertIn("- `tmux`", readme)
+        self.assertIn("- `ripgrep`", readme)
+
+    def test_write_project_files_updates_readme_when_config_changes(self) -> None:
+        app = self.make_app()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+
+            app.config.packages = ["tmux"]
+            app.write_project_files(repo_dir, include_workflow=False)
+            first_readme = (repo_dir / "README.md").read_text()
+
+            app.config.packages = ["ripgrep"]
+            app.write_project_files(repo_dir, include_workflow=False)
+            second_readme = (repo_dir / "README.md").read_text()
+
+        self.assertIn("- `tmux`", first_readme)
+        self.assertNotIn("- `tmux`", second_readme)
+        self.assertIn("- `ripgrep`", second_readme)
+
 
 if __name__ == "__main__":
     unittest.main()
