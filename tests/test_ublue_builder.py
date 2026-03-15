@@ -106,7 +106,7 @@ class BuilderTests(unittest.TestCase):
     def test_base_image_picker_is_limited_to_beginner_images(self) -> None:
         self.assertEqual(
             [image.key for image in BASE_IMAGES],
-            ["bazzite", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
+            ["bazzite", "bazzite-dx", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
         )
 
     def test_validate_config_rejects_unsupported_base_image(self) -> None:

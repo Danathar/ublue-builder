@@ -70,6 +70,7 @@ class BaseImage:
 
 BASE_IMAGES: tuple[BaseImage, ...] = (
     BaseImage("bazzite", "Bazzite", "Best for gaming systems and handheld-style setups", "ghcr.io/ublue-os/bazzite:stable"),
+    BaseImage("bazzite-dx", "Bazzite DX", "Bazzite plus extra developer tools", "ghcr.io/ublue-os/bazzite-dx:stable"),
     BaseImage("aurora", "Aurora (KDE)", "KDE desktop for everyday use", "ghcr.io/ublue-os/aurora:stable"),
     BaseImage("aurora-dx", "Aurora DX", "Aurora plus extra developer tools", "ghcr.io/ublue-os/aurora-dx:stable"),
     BaseImage("bluefin", "Bluefin (GNOME)", "GNOME desktop for everyday use", "ghcr.io/ublue-os/bluefin:stable"),
@@ -856,7 +857,7 @@ class App:
                 if self.gum.confirm("Use this base image?", default=True):
                     return
             else:
-                self.gum.warn("This tool now supports only Aurora, Aurora DX, Bluefin, Bluefin DX, and Bazzite.")
+                self.gum.warn("This tool now supports only Bazzite, Bazzite DX, Aurora, Aurora DX, Bluefin, and Bluefin DX.")
                 self.gum.hint("Choose one of those supported starting images below.")
                 print()
                 self.config.base_image_uri = ""
@@ -2055,7 +2056,7 @@ class App:
         if not self.config.base_image_uri or re.search(r"\s", self.config.base_image_uri):
             raise CommandError("Base image URI is missing or invalid.")
         if not self.match_base_image(self.config.base_image_uri):
-            raise CommandError("Choose one of the supported base images: Aurora, Aurora DX, Bluefin, Bluefin DX, or Bazzite.")
+            raise CommandError("Choose one of the supported base images: Bazzite, Bazzite DX, Aurora, Aurora DX, Bluefin, or Bluefin DX.")
         self.validate_token_list(self.config.packages, PACKAGE_TOKEN_RE, "package")
         self.validate_token_list(self.config.removed_packages, PACKAGE_TOKEN_RE, "removed package")
         self.validate_token_list(self.config.copr_repos, COPR_REPO_RE, "COPR repository")
