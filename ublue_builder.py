@@ -1026,18 +1026,19 @@ class App:
             self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
             self.gum.hint(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
             self.gum.hint(f"Services: {self.summarize_selection(self.config.services, empty='None', verb='enabled')}")
-            self.gum.hint("Choose Continue to review when you are finished.")
+            self.gum.hint("Choose Continue to review when you are finished, or remove packages if you want to undo a package choice.")
             print()
             selection = self.gum.choose(
                 [
                     "Search package names",
                     "Type exact package names",
+                    "Remove selected packages",
                     "Add a COPR repository",
                     "Add systemd services to enable",
                     "Review current selections",
                     "Continue to review",
                 ],
-                height=9,
+                height=10,
             )
             selected = selection[0] if selection else "Continue to review"
             if selected == "Continue to review":
@@ -1048,6 +1049,8 @@ class App:
                     self.search_packages()
                 elif selected == "Type exact package names":
                     self.manual_packages()
+                elif selected == "Remove selected packages":
+                    self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
                 elif selected == "Add a COPR repository":
                     self.add_copr()
                 elif selected == "Add systemd services to enable":
@@ -1136,18 +1139,32 @@ class App:
             except ScreenBack:
                 return
 
-            new_packages = [mapping[label] for label in picked if mapping[label] not in self.config.packages]
-            if not new_packages:
-                self.gum.enter_to_continue("No new packages were added. Press Enter to return to the package menu...")
-                return
+            picked_names = [mapping[label] for label in picked]
+            matching_current = [name for name, _summary in results if name in self.config.packages]
+            removed_names = {name for name in matching_current if name not in picked_names}
+            if removed_names:
+                self.config.packages = [pkg for pkg in self.config.packages if pkg not in removed_names]
+                self.config.normalize()
 
-            before_count = len(self.config.packages)
-            added = self.add_packages_to_config(new_packages, source_label=f"search '{term}'")
-            added_count = len(self.config.packages) - before_count
-            if added and added_count > 0:
+            new_packages = [name for name in picked_names if name not in self.config.packages]
+            added_count = 0
+            if new_packages:
+                before_count = len(self.config.packages)
+                added = self.add_packages_to_config(new_packages, source_label=f"search '{term}'")
+                if added:
+                    added_count = len(self.config.packages) - before_count
+
+            removed_count = len(removed_names)
+            if added_count and removed_count:
+                self.gum.enter_to_continue(
+                    f"Added {added_count} and removed {removed_count} package(s). Press Enter to return to the package menu..."
+                )
+            elif added_count:
                 self.gum.enter_to_continue(f"Added {added_count} package(s). Press Enter to return to the package menu...")
+            elif removed_count:
+                self.gum.enter_to_continue(f"Removed {removed_count} package(s). Press Enter to return to the package menu...")
             else:
-                self.gum.enter_to_continue("No packages were added. Press Enter to return to the package menu...")
+                self.gum.enter_to_continue("No package changes were made. Press Enter to return to the package menu...")
             return
 
     def add_copr(self) -> None:

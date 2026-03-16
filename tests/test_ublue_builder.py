@@ -383,6 +383,69 @@ class BuilderTests(unittest.TestCase):
         self.assertFalse(truncated)
         self.assertIn("dnf5 makecache", message or "")
 
+    def test_search_packages_can_remove_previously_selected_match(self) -> None:
+        app = self.make_app()
+        app.config.packages = ["fish"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def header(self, _title: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def controls(self, *_parts: str) -> None:
+                pass
+
+            def input(self, **_kwargs) -> str:
+                return "fish"
+
+            def form_width(self, **_kwargs) -> int:
+                return 72
+
+            def choose(self, _options, **_kwargs):
+                return []
+
+            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
+                self.prompts.append(placeholder)
+
+        app.gum = GumStub()
+        with patch.object(app, "search_host_packages", return_value=([("fish", "Friendly interactive shell")], False, None)):
+            app.search_packages()
+
+        self.assertEqual(app.config.packages, [])
+        self.assertEqual(app.gum.prompts, ["Removed 1 package(s). Press Enter to return to the package menu..."])
+
+    def test_select_packages_allows_remove_path_in_create_flow(self) -> None:
+        app = self.make_app()
+        app.config.packages = ["fish"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.choices = ["Remove selected packages", "Continue to review"]
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def controls(self, *_parts: str) -> None:
+                pass
+
+            def choose(self, _options, **_kwargs):
+                return [self.choices.pop(0)]
+
+        app.gum = GumStub()
+        with patch.object(app, "choose_to_remove", return_value=[]) as remove_mock:
+            app.select_packages()
+
+        remove_mock.assert_called_once_with(["fish"], "Remove Packages")
+        self.assertEqual(app.config.packages, [])
+
     def test_manual_packages_pauses_after_successful_add(self) -> None:
         app = self.make_app()
 
