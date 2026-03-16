@@ -1072,7 +1072,6 @@ class App:
                 self.gum.enter_to_continue("Press Enter to try another repository name...")
                 continue
             self.config.repo_name = candidate_name
-            print()
             self.config.image_desc = self.gum.input(
                 prompt="Description: ",
                 placeholder=self.config.image_desc,
