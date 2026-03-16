@@ -26,7 +26,7 @@ It currently focuses on the beginner-friendly Containerfile path and uses the of
 - Lets users add packages, COPR repos, services, and base-package removals
 - Updates repos that were previously created by this tool
 - Can scan a running rpm-ostree / bootc system and carry layered packages into a new image repo
-- Can import older Containerfile-based repos into this tool's managed format
+- Includes a legacy import tool for older Containerfile-based repos, but it has not been fully tested and should be avoided for now
 
 ## Why It Exists
 
@@ -83,6 +83,8 @@ Run the legacy import tool:
 ```bash
 ./ublue_builder_import.py
 ```
+
+The legacy importer has not been fully tested and probably does not work correctly yet. Avoid it for now unless you are prepared to inspect and recover the target repo manually.
 
 ## Project Scope
 

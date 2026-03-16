@@ -20,6 +20,8 @@ class LegacyImportApp(App):
                 "",
                 "Adopt an existing image repo into this tool.",
                 "Advanced beta tool for older or manually created repos.",
+                "This importer has not been fully tested and probably does not work correctly yet.",
+                "Avoid it for now unless you are prepared to inspect and recover the target repo manually.",
                 align="center",
                 width=self.gum.content_width(reserve=8),
                 margin="1 2",
