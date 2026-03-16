@@ -738,7 +738,8 @@ class App:
         return "Selected packages are what this repo will attempt to add, even if some are already present in the chosen base image."
 
     def menu_section(self, title: str, *lines: str) -> None:
-        self.gum.instruction(title)
+        label = title if title.endswith((":", "?", "!")) else f"{title}:"
+        self.gum.instruction(label)
         for line in lines:
             self.gum.hint(line)
 
