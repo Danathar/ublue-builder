@@ -932,6 +932,65 @@ class BuilderTests(unittest.TestCase):
                         app.push_update("example", "test-image", repo_dir)
         ensure_mock.assert_not_called()
 
+    def test_push_update_reconfirms_when_signing_changes_the_final_diff(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.confirm_prompts: list[str] = []
+                self.confirm_results = iter([False, True, False, False])
+                self.messages: list[tuple[str, str]] = []
+
+            def confirm(self, prompt: str, default: bool = False) -> bool:
+                self.confirm_prompts.append(prompt)
+                return next(self.confirm_results)
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+            def pager(self, _text: str) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        diff_calls = {"count": 0}
+        run_calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            run_calls.append(list(args))
+            if list(args) == ["git", "diff", "--stat"]:
+                diff_calls["count"] += 1
+                if diff_calls["count"] == 1:
+                    return subprocess.CompletedProcess(list(args), 0, " build_files/build.sh | 1 +\n", "")
+                return subprocess.CompletedProcess(list(args), 0, " build_files/build.sh | 1 +\n cosign.pub | 1 +\n", "")
+            if list(args) == ["git", "status", "--porcelain"]:
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            if list(args) == ["git", "diff"]:
+                return subprocess.CompletedProcess(list(args), 0, "diff --git a/x b/x\n", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            with patch("ublue_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready", return_value=True):
+                    with patch.object(app, "write_project_files", return_value=None):
+                        app.push_update("example", "test-image", repo_dir)
+
+        self.assertTrue(any("final update changed" in message for level, message in app.gum.messages if level == "warn"))
+        self.assertIn("Push final changes to example/test-image?", app.gum.confirm_prompts)
+        self.assertTrue(all(call[:2] != ["git", "add"] for call in run_calls))
+
     def test_push_update_warns_about_hand_edited_managed_repos(self) -> None:
         app = self.make_app()
         app.github_user = "example"
@@ -1124,6 +1183,79 @@ class BuilderTests(unittest.TestCase):
                         with patch.object(app, "ensure_signing_ready") as ensure_mock:
                             app.update_existing_image()
         ensure_mock.assert_not_called()
+
+    def test_load_repo_config_keeps_authenticated_session_user(self) -> None:
+        app = self.make_app()
+        app.github_user = "current-user"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            (repo_dir / STATE_FILE).write_text(
+                json.dumps(
+                    {
+                        "method": "containerfile",
+                        "base_image_uri": "ghcr.io/ublue-os/bazzite:stable",
+                        "base_image_name": "Bazzite (KDE)",
+                        "repo_name": "test-image",
+                        "image_desc": "Test image",
+                        "github_user": "old-user",
+                    }
+                )
+            )
+            app.load_repo_config(repo_dir)
+        self.assertEqual(app.github_user, "current-user")
+
+    def test_search_packages_uses_value_delimiter_for_selected_results(self) -> None:
+        app = self.make_app()
+        app.config.packages = ["fish"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.choose_selected: list[str] | None = None
+                self.choose_options: list[str] | None = None
+                self.choose_label_delimiter: str | None = None
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def instruction(self, *_args, **_kwargs) -> None:
+                pass
+
+            def controls(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def menu_section(self, *_args, **_kwargs) -> None:
+                pass
+
+            def input(self, **_kwargs) -> str:
+                return "fish"
+
+            def form_width(self, **_kwargs) -> int:
+                return 72
+
+            def choose(self, options, **kwargs):
+                self.choose_options = list(options)
+                self.choose_selected = list(kwargs.get("selected", []))
+                self.choose_label_delimiter = kwargs.get("label_delimiter")
+                return ["fish"]
+
+            def enter_to_continue(self, *_args, **_kwargs) -> None:
+                pass
+
+            def warn(self, *_args, **_kwargs) -> None:
+                pass
+
+        app.gum = GumStub()
+        with patch.object(app, "search_host_packages", return_value=([("fish", "Friendly, interactive shell, with extras")], False, None)):
+            with patch.object(app, "add_packages_to_config", return_value=False):
+                app.search_packages()
+
+        self.assertEqual(app.gum.choose_selected, ["fish"])
+        self.assertEqual(app.gum.choose_label_delimiter, "\t")
+        self.assertTrue(app.gum.choose_options)
+        self.assertIn("\tfish", app.gum.choose_options[0])
 
     def test_render_containerfile_preserves_existing_text_when_no_from_line_is_patchable(self) -> None:
         app = self.make_app()

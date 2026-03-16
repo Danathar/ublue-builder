@@ -491,6 +491,7 @@ class Gum:
         no_limit: bool = False,
         selected: Sequence[str] | None = None,
         header: str | None = None,
+        label_delimiter: str | None = None,
         cursor_prefix: str | None = None,
         selected_prefix: str | None = None,
         unselected_prefix: str | None = None,
@@ -512,6 +513,8 @@ class Gum:
             args.extend(["--selected", ",".join(selected)])
         if header:
             args.extend(["--header", header])
+        if label_delimiter is not None:
+            args.extend(["--label-delimiter", label_delimiter])
         if cursor_prefix is not None:
             args.extend(["--cursor-prefix", cursor_prefix])
         if selected_prefix is not None:
@@ -1264,28 +1267,24 @@ class App:
             print()
 
             options: list[str] = []
-            selected: list[str] = []
-            mapping: dict[str, str] = {}
             for name, summary in results:
                 label = f"{name:<30} {self.truncate_label(summary or '(no summary available)', limit=60)}"
-                options.append(label)
-                mapping[label] = name
-                if name in self.config.packages:
-                    selected.append(label)
+                options.append(f"{label}\t{name}")
 
             try:
                 picked = self.gum.choose(
                     options,
                     height=20,
                     no_limit=True,
-                    selected=selected,
+                    selected=self.config.packages,
+                    label_delimiter="\t",
                     selected_prefix="[x] ",
                     unselected_prefix="[ ] ",
                 )
             except ScreenBack:
                 return
 
-            picked_names = [mapping[label] for label in picked]
+            picked_names = picked
             matching_current = [name for name, _summary in results if name in self.config.packages]
             removed_names = {name for name in matching_current if name not in picked_names}
             if removed_names:
@@ -2101,7 +2100,8 @@ class App:
                 "Restore it from Git, or stop using this tool for this repo."
             ) from exc
         self.config = cfg
-        self.github_user = cfg.github_user or self.github_user
+        if not self.github_user:
+            self.github_user = cfg.github_user
 
     def update_menu(self) -> bool:
         # Update uses a task-list style menu instead of the linear create wizard,
@@ -2307,9 +2307,7 @@ class App:
         self.generated_cosign_pub = None
         self.config.signing_enabled = True
         self.write_project_files(repo_dir, include_workflow=True)
-        diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
-        if not diff:
-            diff = run(["git", "status", "--porcelain"], cwd=repo_dir, check=False).stdout.strip()
+        diff = self.repo_diff_summary(repo_dir)
         if not diff:
             self.gum.warn("No changes detected.")
             return
@@ -2318,18 +2316,40 @@ class App:
         self.show_managed_repo_warning()
         print()
         if self.gum.confirm("View full diff?", default=False):
-            full_diff = run(["git", "diff"], cwd=repo_dir, check=False).stdout
+            full_diff = self.repo_full_diff(repo_dir)
             self.gum.pager(self.pager_text_with_hint(full_diff))
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
         self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
         self.write_project_files(repo_dir, include_workflow=True)
+        final_diff = self.repo_diff_summary(repo_dir)
+        if not final_diff:
+            self.gum.warn("No changes detected.")
+            return
+        if final_diff != diff:
+            self.gum.warn("The final update changed after signing was prepared.")
+            print(final_diff)
+            print()
+            if self.gum.confirm("View final full diff?", default=False):
+                final_full_diff = self.repo_full_diff(repo_dir)
+                self.gum.pager(self.pager_text_with_hint(final_full_diff))
+            if not self.gum.confirm(f"Push final changes to {owner}/{repo}?", default=True):
+                return
         self.configure_temp_repo_git_identity(repo_dir)
         run(["git", "add", "-A"], cwd=repo_dir)
         run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir)
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
         self.gum.success(f"Pushed changes to {owner}/{repo}.")
         self.gum.enter_to_continue("Press Enter to return to the main menu...")
+
+    def repo_diff_summary(self, repo_dir: Path) -> str:
+        diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
+        if not diff:
+            diff = run(["git", "status", "--porcelain"], cwd=repo_dir, check=False).stdout.strip()
+        return diff
+
+    def repo_full_diff(self, repo_dir: Path) -> str:
+        return run(["git", "diff"], cwd=repo_dir, check=False).stdout
 
     def pager_text_with_hint(self, text: str) -> str:
         hint = "Press q to close this diff and return to the previous screen."
