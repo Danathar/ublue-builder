@@ -4,6 +4,12 @@ Beta terminal tool for creating and updating GitHub-backed Universal Blue image 
 
 This project is a guided terminal app for beginner Bazzite, Aurora, and Bluefin users who want a custom image repo without learning the full upstream template and workflow setup first.
 
+## Important Note
+
+This project was created with AI assistance and should be treated cautiously.
+
+This project is provided as-is, without any promise that it will be safe for your repositories, data, systems, or build pipeline. Use it carefully, review its changes before applying them, and keep backups where appropriate. The maintainer is not responsible for repository damage, data loss, failed builds, system changes, or other consequences that may result from using this software.
+
 ## Status
 
 This project is currently **0.8 beta** and is **not fully tested yet**. Use it carefully, review the changes it makes, and do not assume every workflow or edge case has already been exercised.
@@ -86,14 +92,6 @@ This repo intentionally keeps the beginner tool narrow:
 - Containerfile-based repo creation and updates are supported
 - BlueBuild support was removed from the beginner app to keep the UX and code simpler
 - If a BlueBuild-focused workflow is needed later, it should live in a separate tool
-
-## Note
-
-This software was created with AI assistance and then reviewed, tested, and iterated on by a human maintainer. You should still review any generated repository changes before pushing them or relying on them for production use.
-
-## Disclaimer
-
-This project is provided as-is, without any promise that it will be safe for your repositories, data, systems, or build pipeline. Use it carefully, review its changes before applying them, and keep backups where appropriate. The maintainer is not responsible for repository damage, data loss, failed builds, system changes, or other consequences that may result from using this software.
 
 ## License
 
