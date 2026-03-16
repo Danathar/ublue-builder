@@ -1311,19 +1311,22 @@ class App:
         self.gum.success(f"Total services configured: {len(self.config.services)}")
 
     def view_selections(self) -> None:
-        self.gum.header("Current Selections")
-        self.gum.hint("This is a read-only summary.")
-        self.gum.controls("Enter back", "Esc back", "Ctrl+C quit")
-        print()
-        rows = [
-            ("Packages", ", ".join(self.config.packages) or "(none)"),
-            ("COPR Repos", ", ".join(self.config.copr_repos) or "(none)"),
-            ("Services", ", ".join(self.config.services) or "(none)"),
-            ("Removed Base Packages", ", ".join(self.config.removed_packages) or "(none)"),
+        sections = [
+            ("Packages", self.config.packages),
+            ("COPR Repositories", self.config.copr_repos),
+            ("Services", self.config.services),
+            ("Removed Base Packages", self.config.removed_packages),
         ]
-        self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
-        print()
-        self.gum.enter_to_continue("Press Enter to go back to the software menu...")
+        lines = ["This is a read-only summary.", ""]
+        for index, (title, values) in enumerate(sections):
+            if index:
+                lines.append("")
+            lines.append(title)
+            if values:
+                lines.extend(f"- {value}" for value in values)
+            else:
+                lines.append("- (none)")
+        self.gum.pager(self.read_only_pager_text("Current Selections", lines))
 
     def show_summary(
         self,
@@ -1332,22 +1335,14 @@ class App:
         total_steps: int | None = None,
         next_hint: str | None = None,
     ) -> None:
-        # The summary deliberately shows counts for list-like data instead of
-        # dumping huge tables. Full details can be reviewed in the edit screens.
+        # Use a pager instead of rendering a table directly so long summaries
+        # stay readable on shorter terminals and close cleanly with q.
+        intro_lines: list[str] = []
+        if next_hint:
+            intro_lines.append(next_hint)
         if step is not None and total_steps is not None:
-            self.show_step_header(
-                "Review Build Configuration",
-                step=step,
-                total_steps=total_steps,
-                next_hint=next_hint,
-            )
-        else:
-            self.gum.header("Review Build Configuration")
-            if next_hint:
-                self.gum.hint(next_hint)
-        self.gum.controls("Enter continue", "Esc back", "Ctrl+C quit")
-        self.gum.hint("This is a read-only summary of the current settings.")
-        print()
+            intro_lines.append(f"Step {step} of {total_steps}.")
+        intro_lines.append("This is a read-only summary of the current settings.")
         rows = [
             ("Repository", f"{self.github_user}/{self.config.repo_name}" if self.github_user else self.config.repo_name),
             ("Description", self.config.image_desc),
@@ -1358,7 +1353,9 @@ class App:
             ("Services", self.summarize_selection(self.config.services, empty="None", verb="enabled", limit=3)),
             ("Removed Base Packages", self.summarize_selection(self.config.removed_packages, empty="None", verb="selected", limit=3)),
         ]
-        self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
+        body = self.format_key_value_rows(rows)
+        lines = [*intro_lines, "", *body]
+        self.gum.pager(self.read_only_pager_text("Review Build Configuration", lines))
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
         self.show_step_header("Review and Create Image", step=step, total_steps=total_steps)
@@ -1383,10 +1380,6 @@ class App:
             return "base"
         if selected == full_label:
             self.show_summary(step=step, total_steps=total_steps, next_hint="This is the full build summary.")
-            try:
-                self.gum.enter_to_continue("Press Enter to go back to the review menu...")
-            except ScreenBack:
-                pass
             return self.review_new_image(step=step, total_steps=total_steps)
         return "cancel"
 
@@ -2021,10 +2014,6 @@ class App:
                 return False
             if selected == review_label:
                 self.show_summary(next_hint="This is the full configuration summary.")
-                try:
-                    self.gum.enter_to_continue("Press Enter to go back to the update menu...")
-                except ScreenBack:
-                    continue
                 continue
             task = mapping[selected]
             try:
@@ -2207,6 +2196,19 @@ class App:
         if not body:
             return hint + "\n"
         return f"{hint}\n\n{body}\n"
+
+    def read_only_pager_text(self, title: str, lines: Sequence[str]) -> str:
+        hint = "Press q to close this screen and return to the previous menu."
+        body = "\n".join(lines).rstrip()
+        if not body:
+            return f"{title}\n\n{hint}\n"
+        return f"{title}\n\n{hint}\n\n{body}\n"
+
+    def format_key_value_rows(self, rows: Sequence[tuple[str, str]]) -> list[str]:
+        if not rows:
+            return []
+        label_width = max(len(label) for label, _value in rows)
+        return [f"{label:<{label_width}}  {value}" for label, value in rows]
 
     def validate_token_list(self, values: list[str], pattern: re.Pattern[str], label: str) -> None:
         # Validation happens before generating shell/YAML so bad values fail here

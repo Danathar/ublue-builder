@@ -1117,6 +1117,47 @@ class BuilderTests(unittest.TestCase):
         self.assertTrue(text.startswith("Press q to close this diff and return to the previous screen."))
         self.assertIn("diff --git a/file b/file", text)
 
+    def test_show_summary_uses_pager_for_read_only_view(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.packages = ["tmux", "ripgrep"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.paged: list[str] = []
+
+            def pager(self, text: str) -> None:
+                self.paged.append(text)
+
+        app.gum = GumStub()
+        app.show_summary(step=4, total_steps=4, next_hint="This is the full build summary.")
+
+        self.assertEqual(len(app.gum.paged), 1)
+        self.assertIn("Review Build Configuration", app.gum.paged[0])
+        self.assertIn("Press q to close this screen", app.gum.paged[0])
+        self.assertIn("Repository", app.gum.paged[0])
+        self.assertIn("Step 4 of 4.", app.gum.paged[0])
+
+    def test_view_selections_uses_pager_for_read_only_view(self) -> None:
+        app = self.make_app()
+        app.config.packages = ["tmux"]
+        app.config.services = ["sshd.service"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.paged: list[str] = []
+
+            def pager(self, text: str) -> None:
+                self.paged.append(text)
+
+        app.gum = GumStub()
+        app.view_selections()
+
+        self.assertEqual(len(app.gum.paged), 1)
+        self.assertIn("Current Selections", app.gum.paged[0])
+        self.assertIn("- tmux", app.gum.paged[0])
+        self.assertIn("- sshd.service", app.gum.paged[0])
+
     def test_patch_container_workflow_injects_cosign_key_into_existing_job_env(self) -> None:
         app = self.make_app()
         workflow = textwrap.dedent(
