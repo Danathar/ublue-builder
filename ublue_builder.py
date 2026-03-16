@@ -170,6 +170,9 @@ def shell_quote(value: str) -> str:
     return shlex.quote(value)
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def validate_string_list(value: object, field_name: str) -> list[str]:
     # State files are user-editable JSON. Strict type checks here keep a broken
     # or hand-edited state file from turning into confusing runtime errors.
@@ -351,7 +354,49 @@ class Gum:
             else:
                 args.extend([flag, str(value)])
         args.extend(lines)
-        return run(args).stdout.rstrip("\n")
+        output = run(args).stdout.rstrip("\n")
+        if output and not ANSI_RE.search(output):
+            output = self.apply_ansi_fallback(output, **opts)
+        return output
+
+    def apply_ansi_fallback(self, text: str, **opts: str | int | bool) -> str:
+        # gum style disables ANSI when we capture stdout through a pipe. Reapply
+        # the basic text styling ourselves so headings and helper text remain
+        # visible in normal terminals.
+        if not sys.stdout.isatty() or not os.environ.get("TERM"):
+            return text
+        codes: list[str] = []
+        if opts.get("bold"):
+            codes.append("1")
+        if opts.get("faint"):
+            codes.append("2")
+        if opts.get("italic"):
+            codes.append("3")
+        if opts.get("underline"):
+            codes.append("4")
+        if opts.get("strikethrough"):
+            codes.append("9")
+        foreground = self.ansi_color_code(opts.get("foreground"), background=False)
+        if foreground:
+            codes.append(foreground)
+        background = self.ansi_color_code(opts.get("background"), background=True)
+        if background:
+            codes.append(background)
+        if not codes:
+            return text
+        return f"\x1b[{';'.join(codes)}m{text}\x1b[0m"
+
+    def ansi_color_code(self, value: str | int | bool | None, *, background: bool) -> str | None:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return f"{48 if background else 38};5;{value}"
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return f"{48 if background else 38};5;{text}"
+        return None
 
     def log(self, level: str, message: str) -> None:
         run(["gum", "log", "--level", level, message], capture=False)
