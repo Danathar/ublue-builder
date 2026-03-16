@@ -15,6 +15,7 @@ from ublue_builder import (
     CONTAINERFILE_TEMPLATE_DIR,
     Config,
     Gum,
+    PACKAGE_SEARCH_LIMIT,
     ScreenBack,
     VERSION,
     config_from_state_payload,
@@ -339,6 +340,48 @@ class BuilderTests(unittest.TestCase):
         self.assertTrue(added)
         self.assertEqual(app.config.packages, ["tmux"])
         self.assertTrue(any(level == "warn" for level, _message in app.gum.messages))
+
+    def test_search_host_packages_parses_results_and_limits_output(self) -> None:
+        app = self.make_app()
+        seen_commands: list[list[str]] = []
+
+        class GumStub:
+            def spinner_result(self, _title, _command, *, cwd=None):
+                seen_commands.append(list(_command))
+                output = "\n".join(
+                    [f"pkg{i}\tSummary {i}" for i in range(PACKAGE_SEARCH_LIMIT + 2)]
+                )
+                return subprocess.CompletedProcess(["dnf5", "repoquery"], 0, output, "")
+
+        app.gum = GumStub()
+        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
+            results, truncated, message = app.search_host_packages("pkg")
+
+        self.assertIsNone(message)
+        self.assertTrue(truncated)
+        self.assertEqual(len(results), PACKAGE_SEARCH_LIMIT)
+        self.assertEqual(results[0], ("pkg0", "Summary 0"))
+        self.assertTrue(any("%{name}\t%{summary}\n" in command for command in seen_commands))
+
+    def test_search_host_packages_reports_missing_cache(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def spinner_result(self, _title, _command, *, cwd=None):
+                return subprocess.CompletedProcess(
+                    ["dnf5", "repoquery"],
+                    1,
+                    "",
+                    'Cache-only enabled but no cache for repository "fedora"',
+                )
+
+        app.gum = GumStub()
+        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
+            results, truncated, message = app.search_host_packages("tmux")
+
+        self.assertEqual(results, [])
+        self.assertFalse(truncated)
+        self.assertIn("dnf5 makecache", message or "")
 
     def test_manual_packages_pauses_after_successful_add(self) -> None:
         app = self.make_app()
@@ -813,10 +856,10 @@ class BuilderTests(unittest.TestCase):
         app.config.services = ["sshd.service"]
         app.config.removed_packages = ["vim-enhanced"]
         choices = dict(app.update_task_choices())
-        self.assertEqual(choices["Packages"], "2 selected")
-        self.assertEqual(choices["COPR repositories"], "1 added")
-        self.assertEqual(choices["Services"], "1 enabled")
-        self.assertEqual(choices["Removed base packages"], "1 selected")
+        self.assertEqual(choices["Packages"], "tmux, ripgrep")
+        self.assertEqual(choices["COPR repositories"], "foo/bar")
+        self.assertEqual(choices["Services"], "sshd.service")
+        self.assertEqual(choices["Removed base packages"], "vim-enhanced")
 
     def test_pager_text_with_hint_puts_exit_instruction_in_pager(self) -> None:
         app = self.make_app()

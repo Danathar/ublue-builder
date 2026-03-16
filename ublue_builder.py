@@ -33,6 +33,8 @@ STATE_FILE = ".ublue-builder.json"
 DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 MAX_UI_WIDTH = 120
+ACCENT_COLOR = 117
+PACKAGE_SEARCH_LIMIT = 40
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 TEMPLATE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "template_snapshots"
 CONTAINERFILE_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "containerfile"
@@ -362,12 +364,15 @@ class Gum:
         if clear_screen:
             self.clear()
         print()
-        print(self.style(f"━━━  {title}  ━━━", foreground=117, bold=True))
-        print(self.style("Esc goes back or cancels. Ctrl+C quits.", faint=True, width=self.content_width()))
+        print(self.style(f"━━━  {title}  ━━━", foreground=ACCENT_COLOR, bold=True))
+        print(self.style("Esc goes back or cancels. Ctrl+C quits.", foreground=ACCENT_COLOR, width=self.content_width()))
         print()
 
     def hint(self, message: str) -> None:
-        print(self.style(message, faint=True, width=self.content_width()))
+        print(self.style(message, width=self.content_width()))
+
+    def instruction(self, message: str) -> None:
+        print(self.style(message, foreground=ACCENT_COLOR, bold=True, width=self.content_width()))
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
         args = ["gum", "confirm", "--no-show-help", prompt]
@@ -386,10 +391,12 @@ class Gum:
         width: int | None = None,
     ) -> str:
         args = ["gum", "input", "--no-show-help", "--prompt", prompt]
+        args.extend(["--prompt.foreground", str(ACCENT_COLOR), "--cursor.foreground", str(ACCENT_COLOR)])
         if value is not None:
             args.extend(["--value", value])
         if placeholder is not None:
             args.extend(["--placeholder", placeholder])
+            args.extend(["--placeholder.foreground", "248"])
         if width is not None:
             args.extend(["--width", str(width)])
         return self.require_interactive_success(self.interactive_stdout(args)).stdout.rstrip("\n")
@@ -397,7 +404,21 @@ class Gum:
     def write(self, *, placeholder: str, height: int, width: int) -> str:
         return self.require_interactive_success(
             self.interactive_stdout(
-                ["gum", "write", "--no-show-help", "--placeholder", placeholder, "--height", str(height), "--width", str(width)]
+                [
+                    "gum",
+                    "write",
+                    "--no-show-help",
+                    "--placeholder",
+                    placeholder,
+                    "--placeholder.foreground",
+                    "248",
+                    "--cursor.foreground",
+                    str(ACCENT_COLOR),
+                    "--height",
+                    str(height),
+                    "--width",
+                    str(width),
+                ]
             )
         ).stdout.rstrip("\n")
 
@@ -414,6 +435,16 @@ class Gum:
         unselected_prefix: str | None = None,
     ) -> list[str]:
         args = ["gum", "choose", "--no-show-help", "--height", str(height)]
+        args.extend(
+            [
+                "--cursor.foreground",
+                str(ACCENT_COLOR),
+                "--header.foreground",
+                str(ACCENT_COLOR),
+                "--selected.foreground",
+                str(ACCENT_COLOR),
+            ]
+        )
         if no_limit:
             args.append("--no-limit")
         if selected:
@@ -433,7 +464,25 @@ class Gum:
     def filter(self, options: Sequence[str], *, height: int = 20, placeholder: str = "Search...") -> str:
         proc = self.require_interactive_success(
             self.interactive_stdout(
-                ["gum", "filter", "--no-show-help", "--height", str(height), "--placeholder", placeholder],
+                [
+                    "gum",
+                    "filter",
+                    "--no-show-help",
+                    "--height",
+                    str(height),
+                    "--placeholder",
+                    placeholder,
+                    "--prompt.foreground",
+                    str(ACCENT_COLOR),
+                    "--header.foreground",
+                    str(ACCENT_COLOR),
+                    "--selected-indicator.foreground",
+                    str(ACCENT_COLOR),
+                    "--match.foreground",
+                    str(ACCENT_COLOR),
+                    "--placeholder.foreground",
+                    "248",
+                ],
                 stdin="\n".join(options) + "\n",
             )
         )
@@ -495,7 +544,24 @@ class Gum:
             Path(status_path).unlink(missing_ok=True)
 
     def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-        self.require_interactive_success(self.interactive_stdout(["gum", "input", "--no-show-help", "--placeholder", placeholder]))
+        self.instruction(placeholder)
+        self.require_interactive_success(
+            self.interactive_stdout(
+                [
+                    "gum",
+                    "input",
+                    "--no-show-help",
+                    "--prompt",
+                    "> ",
+                    "--prompt.foreground",
+                    str(ACCENT_COLOR),
+                    "--cursor.foreground",
+                    str(ACCENT_COLOR),
+                    "--width",
+                    "3",
+                ]
+            )
+        )
 
 
 class App:
@@ -512,6 +578,7 @@ class App:
         self.used_legacy_import = False
         self.generated_cosign_pub: str | None = None
         self.package_lookup_cache: dict[str, bool | None] = {}
+        self.package_search_cache: dict[str, list[tuple[str, str]]] = {}
         self.package_lookup_warning_shown = False
         self.last_manual_package_check_had_missing = False
 
@@ -590,7 +657,7 @@ class App:
         print()
 
     def format_task_choice(self, title: str, status: str) -> str:
-        return f"{title:<24} {status}"
+        return f"{title:<24} {self.truncate_label(status, limit=56)}"
 
     def truncate_label(self, value: str, limit: int = 36) -> str:
         clean = " ".join(value.split())
@@ -598,14 +665,49 @@ class App:
             return clean
         return clean[: limit - 3] + "..."
 
+    def preview_values(self, values: Sequence[str], *, limit: int = 2, item_limit: int = 24) -> str:
+        if not values:
+            return ""
+        shown = [self.truncate_label(value, limit=item_limit) for value in values[:limit]]
+        remaining = len(values) - len(shown)
+        if remaining > 0:
+            shown.append(f"{remaining} more")
+        return ", ".join(shown)
+
+    def summarize_selection(self, values: Sequence[str], *, empty: str, verb: str, limit: int = 2) -> str:
+        if not values:
+            return empty
+        preview = self.preview_values(values, limit=limit)
+        if len(values) <= limit:
+            return preview
+        return f"{len(values)} {verb}: {preview}"
+
+    def software_status(self) -> str:
+        parts: list[str] = []
+        if self.config.packages:
+            parts.append(f"{len(self.config.packages)} pkg")
+        if self.config.copr_repos:
+            parts.append(f"{len(self.config.copr_repos)} COPR")
+        if self.config.services:
+            parts.append(f"{len(self.config.services)} svc")
+        if self.config.removed_packages:
+            parts.append(f"{len(self.config.removed_packages)} removed")
+        return ", ".join(parts) or "No software changes yet"
+
+    def repository_status(self) -> str:
+        repo = f"{self.github_user}/{self.config.repo_name}" if self.github_user else self.config.repo_name or "(not set)"
+        if not self.config.image_desc:
+            return repo
+        return f"{repo} | {self.truncate_label(self.config.image_desc, limit=28)}"
+
     def update_task_choices(self) -> list[tuple[str, str]]:
         return [
-            ("Packages", f"{len(self.config.packages)} selected"),
+            ("Packages", self.summarize_selection(self.config.packages, empty="No packages", verb="selected")),
             ("Base image", self.config.base_image_name or "(not set)"),
             ("Description", self.truncate_label(self.config.image_desc or "(empty)")),
-            ("COPR repositories", f"{len(self.config.copr_repos)} added"),
-            ("Services", f"{len(self.config.services)} enabled"),
-            ("Removed base packages", f"{len(self.config.removed_packages)} selected"),
+            ("COPR repositories", self.summarize_selection(self.config.copr_repos, empty="No COPRs", verb="added")),
+            ("Services", self.summarize_selection(self.config.services, empty="No services", verb="enabled")),
+            ("Removed base packages", self.summarize_selection(self.config.removed_packages, empty="None", verb="selected")),
         ]
 
     def preflight(self) -> None:
@@ -918,32 +1020,37 @@ class App:
             self.gum.header("Software Selection")
         while True:
             self.gum.hint("Use the arrow keys to move and Enter to choose.")
-            self.gum.hint("Type package names manually when you know the RPM package name you want.")
-            self.gum.hint("Choose Done when you are finished and want to keep going.")
-            self.gum.hint(f"Current picks: {len(self.config.packages)} packages and {len(self.config.services)} services.")
+            self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
+            self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
+            self.gum.hint(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
+            self.gum.hint(f"Services: {self.summarize_selection(self.config.services, empty='None', verb='enabled')}")
+            self.gum.hint("Choose Continue to review when you are finished.")
             print()
             selection = self.gum.choose(
                 [
-                    "Type package names manually",
+                    "Search package names",
+                    "Type exact package names",
                     "Add a COPR repository",
                     "Add systemd services to enable",
-                    "View current selections",
-                    "Done",
+                    "Review current selections",
+                    "Continue to review",
                 ],
-                height=8,
+                height=9,
             )
-            selected = selection[0] if selection else "Done"
-            if selected == "Done":
+            selected = selection[0] if selection else "Continue to review"
+            if selected == "Continue to review":
                 self.config.normalize()
                 return
             try:
-                if selected == "Type package names manually":
+                if selected == "Search package names":
+                    self.search_packages()
+                elif selected == "Type exact package names":
                     self.manual_packages()
                 elif selected == "Add a COPR repository":
                     self.add_copr()
                 elif selected == "Add systemd services to enable":
                     self.add_services()
-                elif selected == "View current selections":
+                elif selected == "Review current selections":
                     self.view_selections()
             except ScreenBack:
                 continue
@@ -953,8 +1060,8 @@ class App:
         # package names they want, and the tool does a lightweight local check
         # for obvious mistakes before the GitHub build does the final check.
         print()
-        self.gum.hint("Enter RPM package names separated by spaces or newlines.")
-        self.gum.hint("You should know the RPM package name you want to install before adding it here.")
+        self.gum.hint("Enter exact RPM package names separated by spaces or newlines.")
+        self.gum.hint("Use package search instead if you only know part of the name.")
         self.gum.hint("This tool will try to catch obvious package-name mistakes here first.")
         self.gum.hint("The GitHub build is still the final check.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
@@ -973,6 +1080,74 @@ class App:
             self.gum.enter_to_continue("Finished checking package names. Press Enter to return to the package menu...")
             return
         self.gum.enter_to_continue("No packages were added. Press Enter to return to the package menu...")
+
+    def search_packages(self) -> None:
+        while True:
+            self.gum.header("Search Packages")
+            self.gum.hint("Search package names when you only know part of the RPM name.")
+            self.gum.hint("Search uses local DNF metadata. If it is unavailable here, use exact-name entry instead.")
+            print()
+            term = self.gum.input(
+                prompt="Search term: ",
+                placeholder="tmux, podman, tailscale",
+                width=self.gum.form_width(max_width=72),
+            ).strip()
+            if not term:
+                return
+
+            results, truncated, unavailable_message = self.search_host_packages(term)
+            if unavailable_message:
+                self.gum.warn(unavailable_message)
+                self.gum.enter_to_continue("Press Enter to return to the package menu...")
+                return
+            if not results:
+                self.gum.warn(f"No package names matched '{term}'.")
+                self.gum.hint("Try a shorter or more specific term, or use exact-name entry if you already know the package name.")
+                self.gum.enter_to_continue("Press Enter to search again...")
+                continue
+
+            self.gum.header("Package Search Results")
+            self.gum.hint("Use the arrow keys to move. Press x to select or deselect packages to add.")
+            self.gum.hint("Press Enter when you are finished, or Esc to go back without adding anything.")
+            if truncated:
+                self.gum.hint(f"Showing the first {PACKAGE_SEARCH_LIMIT} matches. Narrow the search term if you need something else.")
+            print()
+
+            options: list[str] = []
+            selected: list[str] = []
+            mapping: dict[str, str] = {}
+            for name, summary in results:
+                label = f"{name:<30} {self.truncate_label(summary or '(no summary available)', limit=60)}"
+                options.append(label)
+                mapping[label] = name
+                if name in self.config.packages:
+                    selected.append(label)
+
+            try:
+                picked = self.gum.choose(
+                    options,
+                    height=20,
+                    no_limit=True,
+                    selected=selected,
+                    selected_prefix="[x] ",
+                    unselected_prefix="[ ] ",
+                )
+            except ScreenBack:
+                return
+
+            new_packages = [mapping[label] for label in picked if mapping[label] not in self.config.packages]
+            if not new_packages:
+                self.gum.enter_to_continue("No new packages were added. Press Enter to return to the package menu...")
+                return
+
+            before_count = len(self.config.packages)
+            added = self.add_packages_to_config(new_packages, source_label=f"search '{term}'")
+            added_count = len(self.config.packages) - before_count
+            if added and added_count > 0:
+                self.gum.enter_to_continue(f"Added {added_count} package(s). Press Enter to return to the package menu...")
+            else:
+                self.gum.enter_to_continue("No packages were added. Press Enter to return to the package menu...")
+            return
 
     def add_copr(self) -> None:
         # COPR is powerful but advanced. The UI copy here tries to frame it as
@@ -1115,39 +1290,41 @@ class App:
             ("Description", self.config.image_desc),
             ("Base Image", self.config.base_image_name or self.config.base_image_uri),
             ("Image URI", self.config.base_image_uri),
-            ("Packages", str(len(self.config.packages))),
-            ("COPR Repos", str(len(self.config.copr_repos))),
-            ("Services", str(len(self.config.services))),
-            ("Removed Base Packages", str(len(self.config.removed_packages))),
+            ("Packages", self.summarize_selection(self.config.packages, empty="None selected", verb="selected", limit=3)),
+            ("COPR Repos", self.summarize_selection(self.config.copr_repos, empty="None", verb="added", limit=3)),
+            ("Services", self.summarize_selection(self.config.services, empty="None", verb="enabled", limit=3)),
+            ("Removed Base Packages", self.summarize_selection(self.config.removed_packages, empty="None", verb="selected", limit=3)),
         ]
         self.gum.table(rows, columns="Setting,Value", widths=self.gum.table_widths(20))
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
-        # We separate the read-only summary from the action menu because small
-        # terminals can otherwise bury the prompt below the table.
-        self.show_summary(step=step, total_steps=total_steps)
-        self.gum.enter_to_continue("Press Enter to continue...")
-        self.gum.header("Choose Next Step")
-        self.gum.hint("Choose Continue to create the GitHub repo and start the build.")
-        self.gum.hint("Choose one of the edit options if you want to change something first.")
+        self.show_step_header("Review and Create Image", step=step, total_steps=total_steps)
+        self.gum.hint("Choose a section to review or change, or start the GitHub build.")
         print()
-        options = [
-            "Continue and start GitHub build",
-            "Edit software",
-            "Edit repository settings",
-            "Edit base image",
-            "Cancel and go back to the main menu",
-        ]
-        choice = self.gum.choose(options, height=7)
-        selected = choice[0] if choice else options[-1]
-        if selected.startswith("Continue"):
+        software_label = self.format_task_choice("Software", self.software_status())
+        repo_label = self.format_task_choice("Repository settings", self.repository_status())
+        base_label = self.format_task_choice("Base image", self.config.base_image_name or "(not set)")
+        full_label = "View full configuration"
+        build_label = "Start GitHub build"
+        cancel_label = "Cancel and return to the main menu"
+        options = [software_label, repo_label, base_label, full_label, build_label, cancel_label]
+        choice = self.gum.choose(options, height=9)
+        selected = choice[0] if choice else cancel_label
+        if selected == build_label:
             return "build"
-        if selected.startswith("Edit software"):
+        if selected == software_label:
             return "software"
-        if selected.startswith("Edit repository"):
+        if selected == repo_label:
             return "repo"
-        if selected.startswith("Edit base image"):
+        if selected == base_label:
             return "base"
+        if selected == full_label:
+            self.show_summary(step=step, total_steps=total_steps, next_hint="Press Enter to go back to the review menu.")
+            try:
+                self.gum.enter_to_continue("Press Enter to go back to the review menu...")
+            except ScreenBack:
+                pass
+            return self.review_new_image(step=step, total_steps=total_steps)
         return "cancel"
 
     def scan_os(self) -> bool:
@@ -1447,7 +1624,6 @@ class App:
             [
                 "env",
                 f"XDG_STATE_HOME={state_dir}",
-                f"XDG_CACHE_HOME={state_dir}",
                 "dnf5",
                 "repoquery",
                 "--available",
@@ -1478,6 +1654,76 @@ class App:
             return False
         self.package_lookup_cache[package] = None
         return None
+
+    def search_host_packages(self, term: str) -> tuple[list[tuple[str, str]], bool, str | None]:
+        normalized = " ".join(term.split())
+        if not normalized:
+            return [], False, None
+        if not command_exists("dnf5"):
+            return [], False, "dnf5 is not installed, so package search is unavailable on this system."
+
+        cache_key = normalized.lower()
+        cached = self.package_search_cache.get(cache_key)
+        if cached is None:
+            state_dir = Path(tempfile.gettempdir()) / "ublue-builder-dnf5"
+            state_dir.mkdir(parents=True, exist_ok=True)
+            pattern = f"*{normalized.replace(' ', '*')}*"
+            proc = self.gum.spinner_result(
+                f"Searching package names for: {normalized}",
+                [
+                    "env",
+                    f"XDG_STATE_HOME={state_dir}",
+                    "dnf5",
+                    "-C",
+                    "repoquery",
+                    "--available",
+                    "--latest-limit",
+                    "1",
+                    "--qf",
+                    "%{name}\t%{summary}\n",
+                    pattern,
+                ],
+            )
+            detail = "\n".join(part for part in [proc.stdout, proc.stderr] if part).lower()
+            if proc.returncode != 0:
+                if "cache-only enabled but no cache" in detail:
+                    return [], False, "Package search needs local DNF metadata. Run 'dnf5 makecache' first, or use exact-name entry."
+                missing_markers = (
+                    "no matches found",
+                    "no package matched",
+                    "no packages to list",
+                    "matched no packages",
+                    "no matching packages",
+                )
+                if any(marker in detail for marker in missing_markers):
+                    return [], False, None
+                return [], False, "Package search is unavailable right now. Use exact-name entry instead."
+
+            by_name: dict[str, str] = {}
+            for raw_line in proc.stdout.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if "\t" in line:
+                    name, summary = line.split("\t", 1)
+                else:
+                    name, summary = line, ""
+                if name not in by_name:
+                    by_name[name] = summary.strip()
+
+            needle = normalized.lower()
+            cached = sorted(
+                by_name.items(),
+                key=lambda item: (
+                    item[0].lower() != needle,
+                    not item[0].lower().startswith(needle),
+                    needle not in item[0].lower(),
+                    item[0].lower(),
+                ),
+            )
+            self.package_search_cache[cache_key] = cached
+
+        return cached[:PACKAGE_SEARCH_LIMIT], len(cached) > PACKAGE_SEARCH_LIMIT, None
 
     def do_build(self) -> bool:
         # "Build" in this app really means "create or update the GitHub repo that
@@ -1866,13 +2112,14 @@ class App:
         while True:
             self.gum.header("Edit Packages")
             self.gum.hint("Choose how you want to change packages.")
-            self.gum.hint("Use manual entry when you know the RPM package name you want.")
+            self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
+            self.gum.hint(f"Current packages: {self.summarize_selection(self.config.packages, empty='None selected', verb='selected')}")
             self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
             print()
             try:
                 choice = self.gum.choose(
-                    ["Add packages manually", "Remove packages", "Back"],
-                    height=7,
+                    ["Search package names", "Type exact package names", "Remove packages", "Back"],
+                    height=8,
                 )
             except ScreenBack:
                 return
@@ -1880,7 +2127,9 @@ class App:
             if selected == "Back":
                 return
             try:
-                if selected == "Add packages manually":
+                if selected == "Search package names":
+                    self.search_packages()
+                elif selected == "Type exact package names":
                     self.manual_packages()
                 elif selected == "Remove packages":
                     self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
@@ -1944,6 +2193,7 @@ class App:
         return [value for value in values if value not in selected]
 
     def manage_services(self) -> None:
+        self.gum.header("Edit Services")
         self.gum.hint("Use the arrow keys to move and Enter to choose.")
         self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
         print()
@@ -1958,6 +2208,7 @@ class App:
             self.config.services = self.choose_to_remove(self.config.services, "Remove Services")
 
     def manage_removed_packages(self) -> None:
+        self.gum.header("Edit Removed Base Packages")
         self.gum.hint("These are packages you want removed from the base image.")
         self.gum.hint("Choose Add to type package names to remove, or Remove to stop removing packages you already listed.")
         self.gum.hint("Choose Back to return to the update menu. Changes are kept automatically.")
