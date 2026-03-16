@@ -2,7 +2,7 @@
 
 Beta terminal tool for creating and updating GitHub-backed Universal Blue image repositories.
 
-This project is a guided terminal app for beginner Bazzite, Aurora, and Bluefin users who want a custom image repo without learning the full upstream template and workflow setup first.
+This project is a guided terminal app for beginner Bazzite, Aurora, and Bluefin users who want a custom image repo without learning the full upstream template and workflow setup first, though the author still recommends learning how to do all of this by hand anyway ;)
 
 > [!NOTE]
 > This project was created with AI assistance and should be treated cautiously.
