@@ -58,6 +58,8 @@ You need:
 - `cosign`
 - `dnf5` for manual package-name checks
 
+On an existing Universal Blue system, all or nearly all of these should probably already be present. If something is missing, you can usually solve it by switching to a developer image such as Bazzite DX, Aurora DX, or Bluefin DX, and/or by installing the missing CLI tools with Homebrew.
+
 You also need a GitHub account and should log in first:
 
 ```bash
