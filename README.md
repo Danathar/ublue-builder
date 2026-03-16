@@ -32,7 +32,6 @@ That bundled snapshot may not always match the latest upstream version, though t
 - Lets users add packages, COPR repos, services, and base-package removals
 - Updates repos that were previously created by this tool
 - Can scan a running rpm-ostree / bootc system and carry layered packages into a new image repo
-- Refuses to adopt existing repos that were not originally created by this tool
 
 ## Why It Exists
 
