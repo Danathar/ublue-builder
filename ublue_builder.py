@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -60,6 +61,14 @@ ACTION_PINS: dict[str, tuple[str, str]] = {
     "docker/login-action": ("c94ce9fb468520275223c153574b00df6fe4bcc9", "v3"),
     "redhat-actions/push-to-registry": ("5ed88d269cf581ea9ef6dd6806d01562096bee9c", "v2"),
     "sigstore/cosign-installer": ("faadad0cce49287aee09b3a48701e75088a2c6ad", "v4.0.0"),
+}
+OFFICIAL_BASE_METADATA_REPOS: dict[str, str] = {
+    "bazzite": "bazzite",
+    "bazzite-dx": "bazzite",
+    "aurora": "aurora",
+    "aurora-dx": "aurora",
+    "bluefin": "bluefin",
+    "bluefin-dx": "bluefin",
 }
 
 
@@ -583,6 +592,7 @@ class App:
         self.generated_cosign_pub: str | None = None
         self.package_lookup_cache: dict[str, bool | None] = {}
         self.package_search_cache: dict[str, list[tuple[str, str]]] = {}
+        self.base_metadata_package_cache: dict[str, set[str] | None] = {}
         self.package_lookup_warning_shown = False
         self.last_manual_package_check_had_missing = False
 
@@ -1326,6 +1336,17 @@ class App:
                 lines.extend(f"- {value}" for value in values)
             else:
                 lines.append("- (none)")
+        advisory_matches = self.requested_packages_in_official_metadata()
+        if advisory_matches:
+            lines.extend(
+                [
+                    "",
+                    "Advisory",
+                    "These requested packages already appear in published official base-image package metadata:",
+                    *[f"- {value}" for value in advisory_matches],
+                    "They are kept as requested packages on purpose.",
+                ]
+            )
         self.gum.pager(self.read_only_pager_text("Current Selections", lines))
 
     def show_summary(
@@ -1355,6 +1376,17 @@ class App:
         ]
         body = self.format_key_value_rows(rows)
         lines = [*intro_lines, "", *body]
+        advisory_matches = self.requested_packages_in_official_metadata()
+        if advisory_matches:
+            lines.extend(
+                [
+                    "",
+                    "Advisory",
+                    "Some requested packages already appear in published official base-image package metadata.",
+                    f"Keeping them requested: {', '.join(advisory_matches)}",
+                    "This is advisory only and may change as upstream metadata changes.",
+                ]
+            )
         self.gum.pager(self.read_only_pager_text("Review Build Configuration", lines))
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
@@ -1495,6 +1527,88 @@ class App:
                 return image
         return None
 
+    def official_base_metadata_target(self) -> tuple[str, bool, str] | None:
+        matched = self.match_base_image(self.config.base_image_uri)
+        if not matched:
+            return None
+        repo = OFFICIAL_BASE_METADATA_REPOS.get(matched.key)
+        if not repo:
+            return None
+        return matched.key, matched.key.endswith("-dx"), repo
+
+    def parse_official_packages_metadata(self, data: object, *, include_dx: bool) -> set[str]:
+        if not isinstance(data, dict):
+            return set()
+        shared = data.get("all")
+        if not isinstance(shared, dict):
+            return set()
+        include = shared.get("include")
+        if not isinstance(include, dict):
+            return set()
+        packages: set[str] = set()
+        values = include.get("all")
+        if isinstance(values, list):
+            packages.update(item.strip() for item in values if isinstance(item, str) and item.strip())
+        if include_dx:
+            dx_values = include.get("dx")
+            if isinstance(dx_values, list):
+                packages.update(item.strip() for item in dx_values if isinstance(item, str) and item.strip())
+        return packages
+
+    def load_official_base_metadata_packages(self) -> set[str] | None:
+        target = self.official_base_metadata_target()
+        if not target:
+            return None
+        cache_key, include_dx, repo = target
+        if cache_key in self.base_metadata_package_cache:
+            return self.base_metadata_package_cache[cache_key]
+        if not self.github_available or not self.github_user or not command_exists("gh"):
+            self.base_metadata_package_cache[cache_key] = None
+            return None
+        try:
+            payload = self.gh_json_with_spinner(
+                "Checking official base image package metadata...",
+                ["api", f"/repos/ublue-os/{repo}/contents/packages.json?ref=main"],
+            )
+        except Exception:
+            self.base_metadata_package_cache[cache_key] = None
+            return None
+        if not isinstance(payload, dict) or payload.get("encoding") != "base64":
+            self.base_metadata_package_cache[cache_key] = None
+            return None
+        content = payload.get("content")
+        if not isinstance(content, str) or not content.strip():
+            self.base_metadata_package_cache[cache_key] = None
+            return None
+        try:
+            decoded = base64.b64decode(content).decode("utf-8")
+            parsed = json.loads(decoded)
+        except (ValueError, json.JSONDecodeError):
+            self.base_metadata_package_cache[cache_key] = None
+            return None
+        packages = self.parse_official_packages_metadata(parsed, include_dx=include_dx)
+        self.base_metadata_package_cache[cache_key] = packages or None
+        return self.base_metadata_package_cache[cache_key]
+
+    def requested_packages_in_official_metadata(self, packages: Sequence[str] | None = None) -> list[str]:
+        requested = list(packages if packages is not None else self.config.packages)
+        if not requested:
+            return []
+        metadata_packages = self.load_official_base_metadata_packages()
+        if not metadata_packages:
+            return []
+        return [package for package in requested if package in metadata_packages]
+
+    def warn_for_packages_already_in_official_metadata(self, packages: Sequence[str]) -> None:
+        matches = self.requested_packages_in_official_metadata(packages)
+        if not matches:
+            return
+        base_name = self.config.base_image_name or "the selected base image"
+        joined = ", ".join(matches)
+        self.gum.warn(f"Some requested packages already appear in official {base_name} package metadata.")
+        self.gum.hint(f"Keeping them requested on purpose: {joined}")
+        self.gum.hint("This is advisory only. Official metadata can change over time.")
+
     def repo_secret_exists(self, owner: str, repo: str, secret_name: str) -> bool:
         # We probe for the secret before trying to generate or upload a new key.
         # That keeps updates idempotent and avoids silently rotating keys.
@@ -1621,6 +1735,7 @@ class App:
         self.config.packages.extend(packages)
         self.config.normalize()
         self.gum.success(f"Added {len(packages)} package(s) from {source_label}")
+        self.warn_for_packages_already_in_official_metadata(packages)
         return True
 
     def filter_available_manual_packages(self, packages: Sequence[str]) -> list[str]:
@@ -2539,8 +2654,8 @@ class App:
 
     def generate_readme(self) -> str:
         # The generated project README is intentionally brief and practical:
-        # what base image was chosen, what packages were added, and how to use
-        # the resulting image once GitHub finishes building it.
+        # what base image was chosen, what package requests were configured, and
+        # how to use the resulting image once GitHub finishes building it.
         base_name = self.config.base_image_name or self.config.base_image_uri
         owner = self.config.github_user or "your-user"
         image_ref = f"ghcr.io/{owner}/{self.config.repo_name}:latest"
@@ -2571,7 +2686,9 @@ class App:
             "",
             "Later tool-driven updates rewrite managed files and can overwrite manual changes, especially `README.md` and `build_files/build.sh`.",
             "",
-            "## Installed Packages",
+            "## Requested Packages",
+            "",
+            "These are the package names requested by this repo's generated build script.",
             "",
             packages,
             "",
