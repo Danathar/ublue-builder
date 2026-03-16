@@ -45,30 +45,14 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "packages must contain only strings"):
             config_from_state_payload({"packages": ["tmux", 42]})
 
-    def test_import_legacy_config_rejects_bluebuild_repo(self) -> None:
-        recipe = textwrap.dedent(
-            """\
-            name: "legacy-image"
-            description: "Legacy BlueBuild repo"
-            base-image: "ghcr.io/ublue-os/bazzite"
-            image-version: "stable"
-
-            modules:
-              - type: default-flatpaks
-                configurations:
-                  - notify: true
-                    scope: system
-                    install:
-                      - "org.mozilla.firefox"
-                  - scope: user
-            """
-        )
+    def test_load_repo_config_rejects_repo_without_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
-            (repo_dir / "recipes").mkdir()
-            (repo_dir / "recipes/recipe.yml").write_text(recipe)
-            with self.assertRaisesRegex(CommandError, "BlueBuild repos are no longer supported"):
-                self.make_app().import_legacy_config(repo_dir)
+            (repo_dir / "Containerfile").write_text("FROM ghcr.io/ublue-os/bazzite:stable\n")
+            (repo_dir / "build_files").mkdir()
+            (repo_dir / "build_files/build.sh").write_text("#!/bin/bash\n")
+            with self.assertRaisesRegex(CommandError, "Only repos created by this tool are supported"):
+                self.make_app().load_repo_config(repo_dir)
 
     def test_patch_container_workflow_pins_actions_and_ignores_state_file(self) -> None:
         app = self.make_app()
@@ -343,6 +327,33 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.packages, ["tmux"])
         self.assertTrue(any(level == "warn" for level, _message in app.gum.messages))
 
+    def test_add_packages_to_config_keeps_missing_manual_packages_when_copr_is_configured(self) -> None:
+        app = self.make_app()
+        app.config.copr_repos = ["foo/bar"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def success(self, message: str) -> None:
+                self.messages.append(("success", message))
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def error(self, message: str) -> None:
+                self.messages.append(("error", message))
+
+            def hint(self, message: str) -> None:
+                self.messages.append(("hint", message))
+
+        app.gum = GumStub()
+        with patch.object(app, "lookup_host_package", return_value=False):
+            added = app.add_packages_to_config(["nethock"], source_label="manual entry")
+        self.assertTrue(added)
+        self.assertEqual(app.config.packages, ["nethock"])
+        self.assertTrue(any(level == "warn" and "host repos" in message for level, message in app.gum.messages))
+
     def test_search_host_packages_parses_results_and_limits_output(self) -> None:
         app = self.make_app()
         seen_commands: list[list[str]] = []
@@ -447,6 +458,36 @@ class BuilderTests(unittest.TestCase):
 
         remove_mock.assert_called_once_with(["fish"], "Remove Packages")
         self.assertEqual(app.config.packages, [])
+
+    def test_select_packages_allows_remove_copr_and_service_paths_in_create_flow(self) -> None:
+        app = self.make_app()
+        app.config.copr_repos = ["foo/bar"]
+        app.config.services = ["sshd.service"]
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.choices = ["Remove COPR repositories", "Remove enabled services", "Continue to review"]
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def controls(self, *_parts: str) -> None:
+                pass
+
+            def choose(self, _options, **_kwargs):
+                return [self.choices.pop(0)]
+
+        app.gum = GumStub()
+        with patch.object(app, "choose_to_remove", side_effect=[[], []]) as remove_mock:
+            app.select_packages()
+
+        self.assertEqual(remove_mock.call_args_list[0].args, (["foo/bar"], "Remove COPR Repositories"))
+        self.assertEqual(remove_mock.call_args_list[1].args, (["sshd.service"], "Remove Services"))
+        self.assertEqual(app.config.copr_repos, [])
+        self.assertEqual(app.config.services, [])
 
     def test_manual_packages_pauses_after_successful_add(self) -> None:
         app = self.make_app()
@@ -959,6 +1000,39 @@ class BuilderTests(unittest.TestCase):
         self.assertTrue(any("missing-repo" in message for message in app.gum.errors))
         self.assertEqual(app.gum.prompts, ["Press Enter to choose a different repository..."])
 
+    def test_select_repo_allows_manual_entry_when_no_managed_repos_are_found(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        manual_label = "Type a repository name manually"
+
+        class GumStub:
+            def warn(self, _message: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def controls(self, *_parts: str) -> None:
+                pass
+
+            def form_width(self, **_kwargs) -> int:
+                return 72
+
+            def filter(self, _options, **_kwargs) -> str:
+                return manual_label
+
+            def input(self, **_kwargs) -> str:
+                return "managed-repo"
+
+        app.gum = GumStub()
+        with patch.object(app, "gh_json_with_spinner", return_value=[]):
+            with patch.object(app, "gh_json", return_value={"name": "managed-repo"}):
+                with patch.object(app, "repo_has_state_file", return_value=True):
+                    owner, repo = app.select_repo(require_state_file=True)
+
+        self.assertEqual((owner, repo), ("example", "managed-repo"))
+
     def test_update_menu_restores_base_image_when_cancelled(self) -> None:
         app = self.make_app()
         base_choice = app.format_task_choice("Base image", "Bazzite")
@@ -1042,27 +1116,6 @@ class BuilderTests(unittest.TestCase):
         text = app.pager_text_with_hint("diff --git a/file b/file\n+new line\n")
         self.assertTrue(text.startswith("Press q to close this diff and return to the previous screen."))
         self.assertIn("diff --git a/file b/file", text)
-
-    def test_import_legacy_containerfile_splits_multiple_services(self) -> None:
-        repo = textwrap.dedent(
-            """\
-            FROM ghcr.io/ublue-os/bazzite:stable
-            """
-        )
-        build_sh = textwrap.dedent(
-            """\
-            #!/bin/bash
-            set -ouex pipefail
-            systemctl enable sshd.service cockpit.socket
-            """
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            repo_dir = Path(tmp)
-            (repo_dir / "Containerfile").write_text(repo)
-            (repo_dir / "build_files").mkdir()
-            (repo_dir / "build_files/build.sh").write_text(build_sh)
-            cfg = self.make_app().import_legacy_containerfile(repo_dir)
-        self.assertEqual(cfg.services, ["sshd.service", "cockpit.socket"])
 
     def test_patch_container_workflow_injects_cosign_key_into_existing_job_env(self) -> None:
         app = self.make_app()

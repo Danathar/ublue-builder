@@ -574,14 +574,12 @@ class App:
     def __init__(self) -> None:
         # The app keeps a small amount of session state beyond Config:
         # - GitHub login information discovered during preflight
-        # - whether a repo was loaded from canonical state or legacy parsing
         # - temporary signing/public-key data while creating or updating a repo
         # - memoized host package lookups so repeated manual checks are faster
         self.gum = Gum()
         self.config = Config()
         self.github_available = False
         self.github_user = ""
-        self.used_legacy_import = False
         self.generated_cosign_pub: str | None = None
         self.package_lookup_cache: dict[str, bool | None] = {}
         self.package_search_cache: dict[str, list[tuple[str, str]]] = {}
@@ -626,6 +624,8 @@ class App:
                 "This tool stores your image repo on GitHub and uses GitHub Actions to build it.",
                 "",
                 "Important:",
+                "This is a third-party tool.",
+                "It is not an official Universal Blue utility and is not sanctioned by the Universal Blue project.",
                 "This tool is provided as-is.",
                 "Review its changes before you push them, and keep backups where appropriate.",
                 "The maintainer is not responsible for repository damage, data loss, failed builds,",
@@ -1034,7 +1034,7 @@ class App:
             self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
             self.gum.hint(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
             self.gum.hint(f"Services: {self.summarize_selection(self.config.services, empty='None', verb='enabled')}")
-            self.gum.hint("Choose Continue to review when you are finished, or remove packages if you want to undo a package choice.")
+            self.gum.hint("Choose Continue to review when you are finished, or use the remove options to undo package, COPR, or service choices.")
             print()
             selection = self.gum.choose(
                 [
@@ -1042,11 +1042,13 @@ class App:
                     "Type exact package names",
                     "Remove selected packages",
                     "Add a COPR repository",
+                    "Remove COPR repositories",
                     "Add systemd services to enable",
+                    "Remove enabled services",
                     "Review current selections",
                     "Continue to review",
                 ],
-                height=10,
+                height=12,
             )
             selected = selection[0] if selection else "Continue to review"
             if selected == "Continue to review":
@@ -1061,8 +1063,12 @@ class App:
                     self.config.packages = self.choose_to_remove(self.config.packages, "Remove Packages")
                 elif selected == "Add a COPR repository":
                     self.add_copr()
+                elif selected == "Remove COPR repositories":
+                    self.config.copr_repos = self.choose_to_remove(self.config.copr_repos, "Remove COPR Repositories")
                 elif selected == "Add systemd services to enable":
                     self.add_services()
+                elif selected == "Remove enabled services":
+                    self.config.services = self.choose_to_remove(self.config.services, "Remove Services")
                 elif selected == "Review current selections":
                     self.view_selections()
             except ScreenBack:
@@ -1485,15 +1491,6 @@ class App:
     def repo_has_state_file(self, owner: str, repo: str) -> bool:
         return self.repo_file_exists(owner, repo, STATE_FILE)
 
-    def repo_is_builder_managed_dir(self, repo_dir: Path) -> bool:
-        return (repo_dir / STATE_FILE).is_file()
-
-    def repo_looks_like_legacy_dir(self, repo_dir: Path) -> bool:
-        if self.repo_is_builder_managed_dir(repo_dir):
-            return False
-        build_script_exists = (repo_dir / "build_files/build.sh").exists() or (repo_dir / "build.sh").exists()
-        return (repo_dir / "Containerfile").exists() and build_script_exists
-
     def ensure_signing_ready(self, owner: str, repo: str) -> bool:
         # Signed images are required for this tool, so "ready" means:
         # - the repo already has SIGNING_SECRET, or
@@ -1609,18 +1606,24 @@ class App:
         # Manual package entry is intentionally forgiving:
         # - known good packages are accepted
         # - clearly missing packages are skipped
+        # - packages that might come from configured COPRs are kept
         # - unknown/uncheckable cases are kept, but the user is warned that the
         #   GitHub build is the final authority
         self.last_manual_package_check_had_missing = False
         accepted: list[str] = []
         missing: list[str] = []
+        missing_but_copr_may_provide: list[str] = []
         unchecked: list[str] = []
         for package in packages:
             available = self.lookup_host_package(package)
             if available is True:
                 accepted.append(package)
             elif available is False:
-                missing.append(package)
+                if self.config.copr_repos:
+                    accepted.append(package)
+                    missing_but_copr_may_provide.append(package)
+                else:
+                    missing.append(package)
             else:
                 accepted.append(package)
                 unchecked.append(package)
@@ -1629,6 +1632,11 @@ class App:
             joined = ", ".join(missing)
             self.gum.error(f"These package names were not found: {joined}")
             self.gum.hint("They were skipped because no RPM package with that name was found.")
+        if missing_but_copr_may_provide:
+            joined = ", ".join(missing_but_copr_may_provide)
+            self.gum.warn("Some package names were not found in your current host repos.")
+            self.gum.hint(f"Keeping for now because configured COPRs may provide them: {joined}")
+            self.gum.hint("The GitHub build will do the final package check.")
         if unchecked and not self.package_lookup_warning_shown:
             joined = ", ".join(unchecked)
             self.gum.warn("Could not fully check some package names on this system.")
@@ -1770,7 +1778,8 @@ class App:
             if self.repo_has_state_file(owner, repo):
                 self.gum.hint("That repo was already created by this tool. Use 'Update Existing Image' to change it, or pick a new repo name.")
             else:
-                self.gum.hint("That repo was not created by this tool. Use 'Import Legacy Repo' if you want this tool to take it over, or pick a new repo name.")
+                self.gum.hint("That repo was not created by this tool.")
+                self.gum.hint("This tool only updates repos it created itself. Pick a new repo name or manage that repo manually.")
             self.gum.enter_to_continue("Press Enter to go back to the review screen...")
             return False
         self.gum.spinner(
@@ -1842,7 +1851,7 @@ class App:
         return True
 
     def select_repo(self, *, require_state_file: bool = False) -> tuple[str, str]:
-        # This helper centralizes repo picking for update/import flows. The
+        # This helper centralizes repo picking for update flows. The
         # require_state_file flag is what prevents the normal update path from
         # accidentally operating on unrelated repos.
         if not self.require_github():
@@ -1852,16 +1861,20 @@ class App:
                 "Fetching repositories from GitHub...",
                 ["repo", "list", self.github_user, "--json", "name,description", "--limit", "100"],
             )
+            visible_repos = repos
             if require_state_file:
                 self.gum.hint("Checking which repos were created by this tool...")
-                repos = [item for item in repos if self.repo_has_state_file(self.github_user, item["name"])]
-            if not repos:
+                visible_repos = [item for item in repos if self.repo_has_state_file(self.github_user, item["name"])]
+            if not visible_repos:
                 if require_state_file:
-                    raise SystemExit("I couldn't find any GitHub repos on your account that were created by this tool yet.")
-                raise SystemExit("No repositories found on your GitHub account.")
+                    self.gum.warn("I couldn't find any GitHub repos on your account that were created by this tool yet.")
+                    self.gum.hint("Type a repository name manually if you know one, or press Esc to go back.")
+                else:
+                    self.gum.warn("No repositories found on your GitHub account.")
+                    self.gum.hint("Type a repository name manually if you want to check one by name, or press Esc to go back.")
             labels: list[str] = []
             mapping: dict[str, tuple[str, str]] = {}
-            for item in repos:
+            for item in visible_repos:
                 description = item.get("description") or "(no description)"
                 if len(description) > 40:
                     description = description[:37] + "..."
@@ -1890,20 +1903,19 @@ class App:
                     self.gum.enter_to_continue("Press Enter to choose a different repository...")
                     continue
                 if require_state_file and not self.repo_has_state_file(self.github_user, repo):
-                    self.gum.error(
-                        f"{self.github_user}/{repo} was not created by this tool."
-                    )
-                    self.gum.hint("Use 'Import Legacy Repo' first if you want to manage it here.")
+                    self.gum.error(f"{self.github_user}/{repo} was not created by this tool.")
+                    self.gum.hint(f"This tool can only update repos with `{STATE_FILE}`.")
+                    self.gum.hint("Create a new repo with this tool instead, or manage that repo manually.")
                     self.gum.enter_to_continue("Press Enter to choose a different repository...")
                     continue
                 return self.github_user, repo
             if choice in mapping:
                 return mapping[choice]
-            raise SystemExit("No repository selected.")
+            raise ScreenBack()
 
     def update_existing_image(self) -> None:
         # Update is deliberately limited to repos that already have the tool's
-        # canonical state file. Legacy repos must go through the import tool.
+        # canonical state file.
         if not self.require_github():
             return
         try:
@@ -1919,163 +1931,37 @@ class App:
             self.config.repo_name = repo
             self.config.github_user = owner
             self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
-            if self.used_legacy_import:
-                print()
-                self.gum.warn("Imported this repo from legacy generated files instead of a canonical state file.")
-                self.gum.hint("Review packages, COPR repos, services, and removed base packages carefully before pushing changes.")
             if self.update_menu():
                 self.show_summary()
                 print()
                 self.push_update(owner, repo, tmpdir)
 
-    def import_legacy_repo(self) -> None:
-        # Import is the "adopt an existing repo" escape hatch. It is kept
-        # separate from normal update flow because it relies on heuristic parsing
-        # and is inherently riskier than loading canonical state.
-        if not self.require_github():
-            return
-        try:
-            owner, repo = self.select_repo()
-        except ScreenBack:
-            return
-        with tempfile.TemporaryDirectory(prefix="ublue-import.") as tmp:
-            tmpdir = Path(tmp)
-            self.clone_repo(owner, repo, tmpdir)
-            if self.repo_is_builder_managed_dir(tmpdir):
-                self.gum.error(f"{owner}/{repo} is already managed by this tool.")
-                self.gum.hint("Use 'Update Existing Image' instead.")
-                return
-            if (tmpdir / "recipes/recipe.yml").exists():
-                self.gum.error(f"{owner}/{repo} looks like a BlueBuild repo.")
-                self.gum.hint("BlueBuild support was removed from this beginner tool.")
-                self.gum.hint("Use a separate BlueBuild-focused tool if you want to manage that repo.")
-                return
-            if not self.repo_looks_like_legacy_dir(tmpdir):
-                self.gum.error(f"{owner}/{repo} does not look like a repo this tool knows how to import.")
-                self.gum.hint("I expected to find a Containerfile with a build script.")
-                return
-            self.import_legacy_config(tmpdir)
-            self.config.repo_name = repo
-            self.config.github_user = owner
-            self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
-            print()
-            self.gum.warn("This repo was made another way, and this tool is about to take over managing it.")
-            self.gum.hint("If you continue, the tool will save its own settings file and rewrite the files it manages.")
-            if not self.update_menu():
-                return
-            self.show_summary()
-            print()
-            if not self.gum.confirm(f"Let this tool take over {owner}/{repo}?", default=False):
-                return
-            self.push_update(owner, repo, tmpdir)
-
     def load_repo_config(self, repo_dir: Path) -> None:
         # Prefer the canonical JSON state file whenever possible. That is what
         # lets update flows be stable instead of reparsing generated shell.
-        self.used_legacy_import = False
         state_path = repo_dir / STATE_FILE
-        if state_path.exists():
-            try:
-                data = json.loads(state_path.read_text())
-                cfg = config_from_state_payload(data)
-            except ValueError as exc:
-                if "unsupported build method" in str(exc):
-                    raise CommandError("This repo uses BlueBuild, which is no longer supported by this tool.") from exc
-                raise CommandError(
-                    "This repo's saved builder settings file is missing or broken. "
-                    "If you edited it by hand, restore it or import the repo again."
-                ) from exc
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise CommandError(
-                    "This repo's saved builder settings file is missing or broken. "
-                    "If you edited it by hand, restore it or import the repo again."
-                ) from exc
-            self.config = cfg
-            self.github_user = cfg.github_user or self.github_user
-            return
-        self.import_legacy_config(repo_dir)
-
-    def import_legacy_config(self, repo_dir: Path) -> None:
-        self.used_legacy_import = True
-        if (repo_dir / "recipes/recipe.yml").exists():
-            raise CommandError("BlueBuild repos are no longer supported by this tool.")
-        if self.repo_looks_like_legacy_dir(repo_dir):
-            self.config = self.import_legacy_containerfile(repo_dir)
-        else:
-            raise CommandError("Repository does not contain a supported legacy Containerfile layout.")
-        if not self.config.repo_name:
-            self.config.repo_name = DEFAULT_REPO_NAME
-        self.config.github_user = self.github_user
-        self.config.normalize()
-
-    def import_legacy_containerfile(self, repo_dir: Path) -> Config:
-        # This parser is intentionally simple and only meant for old repos that
-        # broadly match the layouts this project used to generate. That is why
-        # import remains a dedicated advanced flow instead of the default.
-        cfg = Config(method="containerfile")
-        containerfile = repo_dir / "Containerfile"
-        if containerfile.exists():
-            for line in containerfile.read_text().splitlines():
-                if line.startswith("FROM ") and "scratch" not in line:
-                    cfg.base_image_uri = line.split()[1]
-            matched = self.match_base_image(cfg.base_image_uri)
-            if matched:
-                cfg.base_image_name = matched.name
-            else:
-                cfg.base_image_name = cfg.base_image_uri
-
-        build_sh = repo_dir / "build_files/build.sh"
-        if not build_sh.exists():
-            build_sh = repo_dir / "build.sh"
-        if build_sh.exists():
-            lines = build_sh.read_text().splitlines()
-            block: list[str] = []
-            mode = None
-            for raw in lines:
-                line = re.sub(r"#.*$", "", raw).strip()
-                if not line:
-                    continue
-                if re.search(r"\b(copr enable)\b", line):
-                    match = re.search(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$", line)
-                    if match:
-                        cfg.copr_repos.append(match.group(1))
-                if "systemctl enable" in line:
-                    service_tokens = [
-                        token
-                        for token in line.split("systemctl enable", 1)[1].split()
-                        if token and not token.startswith("-")
-                    ]
-                    cfg.services.extend(service_tokens)
-                if re.search(r"\bdnf5?\s+remove\b", line):
-                    mode = "remove"
-                    block = [line]
-                elif re.search(r"\b(dnf5?|rpm-ostree)\s+install\b", line):
-                    mode = "install"
-                    block = [line]
-                elif mode and (line.endswith("\\") or block and block[-1].endswith("\\")):
-                    block.append(line)
-                else:
-                    mode = None
-                if mode and not block[-1].endswith("\\"):
-                    tokens = " ".join(item.replace("\\", " ") for item in block).split()
-                    if mode == "install":
-                        for token in tokens:
-                            if token not in {"dnf", "dnf5", "install", "-y", "rpm-ostree"}:
-                                cfg.packages.append(token)
-                    else:
-                        for token in tokens:
-                            if token not in {"dnf", "dnf5", "remove", "-y"}:
-                                cfg.removed_packages.append(token)
-                    mode = None
-                    block = []
-
-        workflow = repo_dir / ".github/workflows/build.yml"
-        if workflow.exists():
-            for line in workflow.read_text().splitlines():
-                if line.strip().startswith("IMAGE_DESC:"):
-                    cfg.image_desc = line.split(":", 1)[1].strip().strip('"')
-                    break
-        return cfg
+        if not state_path.exists():
+            raise CommandError(
+                f"This repo does not contain `{STATE_FILE}`, so it was not created by this tool. "
+                "Only repos created by this tool are supported for updates."
+            )
+        try:
+            data = json.loads(state_path.read_text())
+            cfg = config_from_state_payload(data)
+        except ValueError as exc:
+            if "unsupported build method" in str(exc):
+                raise CommandError("This repo uses BlueBuild, which is no longer supported by this tool.") from exc
+            raise CommandError(
+                f"This repo's saved settings file `{STATE_FILE}` is missing or broken. "
+                "Restore it from Git, or stop using this tool for this repo."
+            ) from exc
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise CommandError(
+                f"This repo's saved settings file `{STATE_FILE}` is missing or broken. "
+                "Restore it from Git, or stop using this tool for this repo."
+            ) from exc
+        self.config = cfg
+        self.github_user = cfg.github_user or self.github_user
 
     def update_menu(self) -> bool:
         # Update uses a task-list style menu instead of the linear create wizard,

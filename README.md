@@ -7,6 +7,8 @@ This project is a guided terminal app for beginner Bazzite, Aurora, and Bluefin 
 > [!NOTE]
 > This project was created with AI assistance and should be treated cautiously.
 >
+> This is a third-party tool. It is not an official Universal Blue utility and is not sanctioned by the Universal Blue project.
+>
 > This project is provided as-is, without any promise that it will be safe for your repositories, data, systems, or build pipeline. Use it carefully, review its changes before applying them, and keep backups where appropriate. The maintainer is not responsible for repository damage, data loss, failed builds, system changes, or other consequences that may result from using this software.
 
 ## Status
@@ -26,7 +28,7 @@ It currently focuses on the beginner-friendly Containerfile path and uses the of
 - Lets users add packages, COPR repos, services, and base-package removals
 - Updates repos that were previously created by this tool
 - Can scan a running rpm-ostree / bootc system and carry layered packages into a new image repo
-- Includes a legacy import tool for older Containerfile-based repos, but it has not been fully tested and should be avoided for now
+- Refuses to adopt existing repos that were not originally created by this tool
 
 ## Why It Exists
 
@@ -80,19 +82,12 @@ Run the beginner app:
 ./ublue_builder.py
 ```
 
-Run the legacy import tool:
-
-```bash
-./ublue_builder_import.py
-```
-
-The legacy importer has not been fully tested and probably does not work correctly yet. Avoid it for now unless you are prepared to inspect and recover the target repo manually.
-
 ## Project Scope
 
 This repo intentionally keeps the beginner tool narrow:
 
 - Containerfile-based repo creation and updates are supported
+- Existing repos that do not contain `.ublue-builder.json` are not supported for adoption or import
 - BlueBuild support was removed from the beginner app to keep the UX and code simpler
 - If a BlueBuild-focused workflow is needed later, it should live in a separate tool
 
