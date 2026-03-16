@@ -462,6 +462,9 @@ class BuilderTests(unittest.TestCase):
             def hint(self, _message: str) -> None:
                 pass
 
+            def controls(self, *_parts: str) -> None:
+                pass
+
             def choose(self, _options, **_kwargs):
                 return [f"{COMMON_SERVICES[1][0]} ({COMMON_SERVICES[1][1]})"]
 
@@ -753,6 +756,9 @@ class BuilderTests(unittest.TestCase):
                 self.filters = [manual_label, existing_label]
 
             def hint(self, _message: str) -> None:
+                pass
+
+            def controls(self, *_parts: str) -> None:
                 pass
 
             def form_width(self, **_kwargs) -> int:

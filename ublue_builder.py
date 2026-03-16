@@ -365,7 +365,6 @@ class Gum:
             self.clear()
         print()
         print(self.style(f"━━━  {title}  ━━━", foreground=ACCENT_COLOR, bold=True))
-        print(self.style("Esc goes back or cancels. Ctrl+C quits.", foreground=ACCENT_COLOR, width=self.content_width()))
         print()
 
     def hint(self, message: str) -> None:
@@ -373,6 +372,9 @@ class Gum:
 
     def instruction(self, message: str) -> None:
         print(self.style(message, foreground=ACCENT_COLOR, bold=True, width=self.content_width()))
+
+    def controls(self, *parts: str) -> None:
+        self.instruction("Keys: " + " | ".join(parts))
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
         args = ["gum", "confirm", "--no-show-help", prompt]
@@ -864,7 +866,7 @@ class App:
         # create/update flows instead of exiting after one action.
         while True:
             self.gum.header("Main Menu")
-            self.gum.hint("Use the arrow keys to move and Enter to choose.")
+            self.gum.controls("Up/Down move", "Enter choose", "Esc quit", "Ctrl+C quit")
             print()
             try:
                 action = self.gum.choose(
@@ -943,7 +945,7 @@ class App:
             self.show_step_header("Base Image", step=step, total_steps=total_steps)
         else:
             self.gum.header("Base Image")
-        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
         self.gum.hint("DX means the image starts with extra developer tools already included.")
         print()
         if self.config.base_image_uri:
@@ -1019,7 +1021,7 @@ class App:
         else:
             self.gum.header("Software Selection")
         while True:
-            self.gum.hint("Use the arrow keys to move and Enter to choose.")
+            self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
             self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
             self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
             self.gum.hint(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
@@ -1107,8 +1109,7 @@ class App:
                 continue
 
             self.gum.header("Package Search Results")
-            self.gum.hint("Use the arrow keys to move. Press x to select or deselect packages to add.")
-            self.gum.hint("Press Enter when you are finished, or Esc to go back without adding anything.")
+            self.gum.controls("Up/Down move", "x select", "Enter add", "Esc back", "Ctrl+C quit")
             if truncated:
                 self.gum.hint(f"Showing the first {PACKAGE_SEARCH_LIMIT} matches. Narrow the search term if you need something else.")
             print()
@@ -1214,8 +1215,7 @@ class App:
 
     def select_common_services(self) -> None:
         self.gum.header("Common Services")
-        self.gum.hint("Use the arrow keys to move. Press x to select or deselect services to enable at boot.")
-        self.gum.hint("Press Enter when you are finished, or Esc to go back.")
+        self.gum.controls("Up/Down move", "x select", "Enter save", "Esc back", "Ctrl+C quit")
         print()
         label_to_service = {f"{label} ({service})": service for label, service in COMMON_SERVICES}
         options = list(label_to_service)
@@ -1252,7 +1252,7 @@ class App:
     def view_selections(self) -> None:
         self.gum.header("Current Selections")
         self.gum.hint("This is a read-only summary.")
-        self.gum.hint("Press Enter to go back to the software menu.")
+        self.gum.controls("Enter back", "Esc back", "Ctrl+C quit")
         print()
         rows = [
             ("Packages", ", ".join(self.config.packages) or "(none)"),
@@ -1278,11 +1278,13 @@ class App:
                 "Review Build Configuration",
                 step=step,
                 total_steps=total_steps,
-                next_hint=next_hint or "Press Enter to continue. Esc goes back. Ctrl+C quits.",
+                next_hint=next_hint,
             )
         else:
             self.gum.header("Review Build Configuration")
-            self.gum.hint(next_hint or "Press Enter to continue. Esc goes back. Ctrl+C quits.")
+            if next_hint:
+                self.gum.hint(next_hint)
+        self.gum.controls("Enter continue", "Esc back", "Ctrl+C quit")
         self.gum.hint("This is a read-only summary of the current settings.")
         print()
         rows = [
@@ -1319,7 +1321,7 @@ class App:
         if selected == base_label:
             return "base"
         if selected == full_label:
-            self.show_summary(step=step, total_steps=total_steps, next_hint="Press Enter to go back to the review menu.")
+            self.show_summary(step=step, total_steps=total_steps, next_hint="This is the full build summary.")
             try:
                 self.gum.enter_to_continue("Press Enter to go back to the review menu...")
             except ScreenBack:
@@ -1390,8 +1392,8 @@ class App:
         print()
 
         if self.config.scanned_packages:
-            self.gum.hint("Use the arrow keys to move. Press x to select or deselect packages to carry over.")
-            self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
+            self.gum.controls("Up/Down move", "x select", "Enter continue", "Esc back", "Ctrl+C quit")
+            self.gum.hint("Leave everything unselected if you want to skip carrying these packages over.")
             print()
             try:
                 selected = self.gum.choose(
@@ -1412,8 +1414,8 @@ class App:
                 return False
 
         if self.config.scanned_removed:
-            self.gum.hint("Use the arrow keys to move. Press x to select or deselect base packages to remove.")
-            self.gum.hint("Press Enter when you are finished, or leave everything unselected to skip them.")
+            self.gum.controls("Up/Down move", "x select", "Enter continue", "Esc back", "Ctrl+C quit")
+            self.gum.hint("Leave everything unselected if you do not want to remove any base packages.")
             print()
             try:
                 selected_removed = self.gum.choose(
@@ -1840,7 +1842,7 @@ class App:
                 mapping[label] = (self.github_user, item["name"])
             manual_label = "Type a repository name manually"
             labels.append(manual_label)
-            self.gum.hint("Type to search, then use the arrow keys to move and Enter to choose.")
+            self.gum.controls("Type to search", "Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
             self.gum.hint("Choose the last option if you want to type a repository name yourself.")
             print()
             choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
@@ -2076,7 +2078,7 @@ class App:
             if selected == cancel_label:
                 return False
             if selected == review_label:
-                self.show_summary(next_hint="Press Enter to continue. Esc goes back. Ctrl+C quits.")
+                self.show_summary(next_hint="This is the full configuration summary.")
                 try:
                     self.gum.enter_to_continue("Press Enter to go back to the update menu...")
                 except ScreenBack:
@@ -2177,8 +2179,8 @@ class App:
         if not values:
             self.gum.warn("Nothing to remove.")
             return values
-        self.gum.hint("Use the arrow keys to move. Press x to select or deselect items to remove.")
-        self.gum.hint("Press Enter when you are finished, or leave everything unselected to keep everything.")
+        self.gum.controls("Up/Down move", "x select", "Enter save", "Esc back", "Ctrl+C quit")
+        self.gum.hint("Leave everything unselected if you want to keep everything.")
         print()
         selected = set(
             self.gum.choose(
@@ -2194,7 +2196,7 @@ class App:
 
     def manage_services(self) -> None:
         self.gum.header("Edit Services")
-        self.gum.hint("Use the arrow keys to move and Enter to choose.")
+        self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
         self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
         print()
         try:
