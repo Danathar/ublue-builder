@@ -951,6 +951,9 @@ class BuilderTests(unittest.TestCase):
             def header(self, *_args, **_kwargs) -> None:
                 pass
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, *_args, **_kwargs) -> None:
                 pass
 
@@ -1008,6 +1011,9 @@ class BuilderTests(unittest.TestCase):
                 self.prompts: list[str] = []
                 self.filters = [manual_label, existing_label]
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, _message: str) -> None:
                 pass
 
@@ -1052,6 +1058,9 @@ class BuilderTests(unittest.TestCase):
             def warn(self, _message: str) -> None:
                 pass
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, _message: str) -> None:
                 pass
 
@@ -1084,6 +1093,9 @@ class BuilderTests(unittest.TestCase):
                 self.choices = [base_choice, "Cancel and go back"]
 
             def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def instruction(self, _message: str) -> None:
                 pass
 
             def hint(self, *_args, **_kwargs) -> None:

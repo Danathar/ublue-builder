@@ -1016,7 +1016,7 @@ class App:
         else:
             self.gum.header("Base Image")
         self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
-        self.gum.hint("DX means the image starts with extra developer tools already included.")
+        self.menu_section("Tip", "DX means the image starts with extra developer tools already included.")
         print()
         if self.config.base_image_uri:
             matched = self.match_base_image(self.config.base_image_uri)
@@ -1054,7 +1054,10 @@ class App:
                 self.show_step_header("Repository Configuration", step=step, total_steps=total_steps)
             else:
                 self.gum.header("Repository Configuration")
-            self.gum.hint("Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.")
+            self.menu_section(
+                "Repository Rules",
+                "Repository names use letters, numbers, dashes, and dots. Spaces are turned into dashes.",
+            )
             print()
             default_name = self.config.repo_name or DEFAULT_REPO_NAME
             raw_name = self.gum.input(
@@ -1075,7 +1078,7 @@ class App:
                 width=self.gum.form_width(max_width=110),
             ) or self.config.image_desc
             print()
-            self.gum.hint("Repositories created by this tool are public.")
+            self.menu_section("Visibility", "Repositories created by this tool are public.")
             print()
             if self.github_user:
                 self.gum.success(f"Repo: {self.github_user}/{self.config.repo_name}")
@@ -1353,8 +1356,11 @@ class App:
     def add_services_manually(self) -> None:
         self.gum.header("Add Services Manually")
         print()
-        self.gum.hint("Type systemd service names like sshd.service or tailscaled.service.")
-        self.gum.hint("Leave this empty if you want to go back without adding anything.")
+        self.menu_section(
+            "What To Enter",
+            "Type systemd service names like sshd.service or tailscaled.service.",
+            "Leave this empty if you want to go back without adding anything.",
+        )
         raw = self.gum.write(
             placeholder="Enter service names, one per line...",
             height=5,
@@ -1501,7 +1507,7 @@ class App:
 
         if self.config.scanned_packages:
             self.gum.controls("Up/Down move", "x select", "Enter continue", "Esc back", "Ctrl+C quit")
-            self.gum.hint("Leave everything unselected if you want to skip carrying these packages over.")
+            self.menu_section("Selection", "Leave everything unselected if you want to skip carrying these packages over.")
             print()
             try:
                 selected = self.gum.choose(
@@ -1523,7 +1529,7 @@ class App:
 
         if self.config.scanned_removed:
             self.gum.controls("Up/Down move", "x select", "Enter continue", "Esc back", "Ctrl+C quit")
-            self.gum.hint("Leave everything unselected if you do not want to remove any base packages.")
+            self.menu_section("Selection", "Leave everything unselected if you do not want to remove any base packages.")
             print()
             try:
                 selected_removed = self.gum.choose(
@@ -1959,7 +1965,10 @@ class App:
             manual_label = "Type a repository name manually"
             labels.append(manual_label)
             self.gum.controls("Type to search", "Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
-            self.gum.hint("Choose the last option if you want to type a repository name yourself.")
+            self.menu_section(
+                "Next Step",
+                "Choose the last option if you want to type a repository name yourself.",
+            )
             print()
             choice = self.gum.filter(labels, height=20, placeholder="Search repos...")
             if choice == manual_label:
@@ -2043,8 +2052,11 @@ class App:
         # because returning users usually want to jump straight to one section.
         while True:
             self.gum.header("Update Image")
-            self.gum.hint("Choose a section to review or change.")
-            self.gum.hint("Save and push changes when you are finished, or cancel to go back.")
+            self.menu_section(
+                "Next Step",
+                "Choose a section to review or change.",
+                "Save and push changes when you are finished, or cancel to go back.",
+            )
             print()
             mapping: dict[str, str] = {}
             options: list[str] = []
@@ -2153,8 +2165,11 @@ class App:
 
     def edit_description(self) -> None:
         self.gum.header("Edit Description")
-        self.gum.hint("Enter a short description for this image.")
-        self.gum.hint("Leave it empty if you want to keep the current description.")
+        self.menu_section(
+            "Description",
+            "Enter a short description for this image.",
+            "Leave it empty if you want to keep the current description.",
+        )
         print()
         value = self.gum.input(
             prompt="New description: ",
@@ -2170,7 +2185,7 @@ class App:
             return values
         self.gum.header(header)
         self.gum.controls("Up/Down move", "x select", "Enter save", "Esc back", "Ctrl+C quit")
-        self.gum.hint("Leave everything unselected if you want to keep everything.")
+        self.menu_section("Selection", "Leave everything unselected if you want to keep everything.")
         print()
         selected = set(
             self.gum.choose(
@@ -2216,7 +2231,10 @@ class App:
             return
         selected = choice[0] if choice else "Back"
         if selected == "Add package names to remove":
-            self.gum.hint("Enter one package name per line. Leave this empty if you want to go back.")
+            self.menu_section(
+                "What To Enter",
+                "Enter one package name per line. Leave this empty if you want to go back.",
+            )
             raw = self.gum.write(
                 placeholder="Enter package names, one per line...",
                 height=6,
