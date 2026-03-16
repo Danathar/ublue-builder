@@ -227,53 +227,6 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.packages, ["tmux", "ripgrep"])
         self.assertTrue(any(level == "success" for level, _message in app.gum.messages))
 
-    def test_add_packages_to_config_warns_when_package_is_in_official_metadata(self) -> None:
-        app = self.make_app()
-        app.github_available = True
-        app.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
-        app.gum = GumStub()
-        with patch.object(app, "requested_packages_in_official_metadata", return_value=["fish"]):
-            added = app.add_packages_to_config(["fish"], source_label="search 'fish'")
-        self.assertTrue(added)
-        self.assertEqual(app.config.packages, ["fish"])
-        self.assertTrue(any(level == "warn" and "official Bazzite package metadata" in message for level, message in app.gum.messages))
-
-    def test_parse_official_packages_metadata_uses_shared_and_dx_lists(self) -> None:
-        app = self.make_app()
-        metadata = {
-            "all": {
-                "include": {
-                    "all": ["fish", "tmux"],
-                    "dx": ["ripgrep"],
-                }
-            },
-            "42": {
-                "include": {
-                    "all": ["version-specific-only"],
-                }
-            },
-        }
-
-        self.assertEqual(app.parse_official_packages_metadata(metadata, include_dx=False), {"fish", "tmux"})
-        self.assertEqual(app.parse_official_packages_metadata(metadata, include_dx=True), {"fish", "tmux", "ripgrep"})
-
     def test_add_packages_to_config_rejects_unsafe_tokens(self) -> None:
         app = self.make_app()
 
@@ -535,6 +488,30 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(remove_mock.call_args_list[1].args, (["sshd.service"], "Remove Services"))
         self.assertEqual(app.config.copr_repos, [])
         self.assertEqual(app.config.services, [])
+
+    def test_select_packages_shows_requested_package_note(self) -> None:
+        app = self.make_app()
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.hints: list[str] = []
+
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def hint(self, message: str) -> None:
+                self.hints.append(message)
+
+            def controls(self, *_parts: str) -> None:
+                pass
+
+            def choose(self, _options, **_kwargs):
+                return ["Continue to review"]
+
+        app.gum = GumStub()
+        app.select_packages()
+
+        self.assertIn(app.requested_packages_note(), app.gum.hints)
 
     def test_manual_packages_pauses_after_successful_add(self) -> None:
         app = self.make_app()
@@ -1185,25 +1162,6 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("Repository", app.gum.paged[0])
         self.assertIn("Step 4 of 4.", app.gum.paged[0])
 
-    def test_show_summary_includes_official_metadata_advisory(self) -> None:
-        app = self.make_app()
-        app.github_user = "example"
-        app.config.packages = ["fish"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.paged: list[str] = []
-
-            def pager(self, text: str) -> None:
-                self.paged.append(text)
-
-        app.gum = GumStub()
-        with patch.object(app, "requested_packages_in_official_metadata", return_value=["fish"]):
-            app.show_summary()
-
-        self.assertIn("Advisory", app.gum.paged[0])
-        self.assertIn("Keeping them requested: fish", app.gum.paged[0])
-
     def test_view_selections_uses_pager_for_read_only_view(self) -> None:
         app = self.make_app()
         app.config.packages = ["tmux"]
@@ -1223,25 +1181,6 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("Current Selections", app.gum.paged[0])
         self.assertIn("- tmux", app.gum.paged[0])
         self.assertIn("- sshd.service", app.gum.paged[0])
-
-    def test_view_selections_includes_official_metadata_advisory(self) -> None:
-        app = self.make_app()
-        app.config.packages = ["fish"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.paged: list[str] = []
-
-            def pager(self, text: str) -> None:
-                self.paged.append(text)
-
-        app.gum = GumStub()
-        with patch.object(app, "requested_packages_in_official_metadata", return_value=["fish"]):
-            app.view_selections()
-
-        self.assertIn("Advisory", app.gum.paged[0])
-        self.assertIn("already appear in published official base-image package metadata", app.gum.paged[0])
-        self.assertIn("- fish", app.gum.paged[0])
 
     def test_patch_container_workflow_injects_cosign_key_into_existing_job_env(self) -> None:
         app = self.make_app()
@@ -1273,6 +1212,7 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("- `ripgrep`", readme)
         self.assertIn("## Requested Packages", readme)
         self.assertIn("requested by this repo's generated build script", readme)
+        self.assertIn(app.requested_packages_note(), readme)
         self.assertNotIn("## Installed Packages", readme)
         self.assertIn("## Managed By ublue-builder", readme)
         self.assertIn(f"`{STATE_FILE}`", readme)
