@@ -117,10 +117,13 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaisesRegex(CommandError, "brew install cosign"):
                     app.ensure_signing_ready("example", "test-image")
 
-    def test_preflight_requires_cosign(self) -> None:
+    def test_preflight_warns_when_cosign_is_missing(self) -> None:
         app = self.make_app()
 
         class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
             def ensure_available(self) -> None:
                 pass
 
@@ -133,8 +136,8 @@ class BuilderTests(unittest.TestCase):
             def success(self, *_args, **_kwargs) -> None:
                 pass
 
-            def warn(self, *_args, **_kwargs) -> None:
-                pass
+            def warn(self, message: str, *_args, **_kwargs) -> None:
+                self.messages.append(("warn", message))
 
             def enter_to_continue(self, *_args, **_kwargs) -> None:
                 pass
@@ -150,8 +153,8 @@ class BuilderTests(unittest.TestCase):
             with patch("ublue_builder.run") as run_mock:
                 run_mock.return_value = subprocess.CompletedProcess(["gh", "auth", "status"], 0, "", "")
                 with patch.object(app, "gh_json", return_value={"login": "example"}):
-                    with self.assertRaisesRegex(SystemExit, "brew install cosign"):
-                        app.preflight()
+                    app.preflight()
+        self.assertTrue(any("cosign not found" in message for level, message in app.gum.messages if level == "warn"))
 
     def test_preflight_requires_github_cli(self) -> None:
         app = self.make_app()
@@ -640,6 +643,19 @@ class BuilderTests(unittest.TestCase):
                 app.do_build()
         run_mock.assert_not_called()
 
+    def test_do_build_requires_cosign_before_creating_repo(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
+            with patch("ublue_builder.run") as run_mock:
+                run_mock.return_value = subprocess.CompletedProcess(["gh", "repo", "view"], 1, "", "")
+                with self.assertRaisesRegex(CommandError, "SIGNING_SECRET"):
+                    app.do_build()
+        self.assertTrue(all(call.args[0][:3] != ["gh", "repo", "create"] for call in run_mock.call_args_list))
+
     def test_do_build_deletes_repo_if_setup_fails_after_creation(self) -> None:
         app = self.make_app()
         app.github_available = True
@@ -872,6 +888,50 @@ class BuilderTests(unittest.TestCase):
         self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
         self.assertIn(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], run_calls)
 
+    def test_push_update_does_not_configure_signing_until_push_is_confirmed(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.confirm_results = iter([False, False])
+
+            def confirm(self, _prompt: str, default: bool = False) -> bool:
+                return next(self.confirm_results)
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+            def pager(self, _text: str) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        def fake_run(args, **_kwargs):
+            if list(args) == ["git", "diff", "--stat"]:
+                return subprocess.CompletedProcess(list(args), 0, " build_files/build.sh | 1 +\n", "")
+            if list(args) == ["git", "diff"]:
+                return subprocess.CompletedProcess(list(args), 0, "diff --git a/x b/x\n", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            with patch("ublue_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready") as ensure_mock:
+                    with patch.object(app, "write_project_files", return_value=None):
+                        app.push_update("example", "test-image", repo_dir)
+        ensure_mock.assert_not_called()
+
     def test_push_update_warns_about_hand_edited_managed_repos(self) -> None:
         app = self.make_app()
         app.github_user = "example"
@@ -997,6 +1057,86 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(app.config.removed_packages, [])
         self.assertEqual(app.config.base_image_name, "Bazzite (KDE)")
         self.assertEqual(app.config.github_user, "example")
+
+    def test_scan_os_preserves_exact_running_image_ref(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+
+        class GumStub:
+            def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def instruction(self, _message: str) -> None:
+                pass
+
+            def hint(self, *_args, **_kwargs) -> None:
+                pass
+
+            def table(self, *_args, **_kwargs) -> None:
+                pass
+
+            def error(self, *_args, **_kwargs) -> None:
+                pass
+
+            def warn(self, *_args, **_kwargs) -> None:
+                pass
+
+            def confirm(self, *_args, **_kwargs) -> bool:
+                return True
+
+            def table_widths(self, *_args, **_kwargs) -> str:
+                return "20,40"
+
+        status_payload = json.dumps(
+            {
+                "deployments": [
+                    {
+                        "booted": True,
+                        "container-image-reference": "docker://ghcr.io/ublue-os/bazzite:testing",
+                        "requested-packages": [],
+                        "requested-base-removals": [],
+                    }
+                ]
+            }
+        )
+        app.gum = GumStub()
+        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
+            with patch(
+                "ublue_builder.run",
+                return_value=subprocess.CompletedProcess(["rpm-ostree", "status", "--json", "--booted"], 0, status_payload, ""),
+            ):
+                result = app.scan_os()
+
+        self.assertTrue(result)
+        self.assertEqual(app.config.base_image_uri, "ghcr.io/ublue-os/bazzite:testing")
+        self.assertEqual(app.config.base_image_name, "Bazzite (KDE)")
+
+    def test_update_existing_image_defers_signing_setup_until_push(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        with patch.object(app, "select_repo", return_value=("example", "test-image")):
+            with patch.object(app, "clone_repo", return_value=None):
+                with patch.object(app, "load_repo_config", return_value=None):
+                    with patch.object(app, "update_menu", return_value=False):
+                        with patch.object(app, "ensure_signing_ready") as ensure_mock:
+                            app.update_existing_image()
+        ensure_mock.assert_not_called()
+
+    def test_render_containerfile_preserves_existing_text_when_no_from_line_is_patchable(self) -> None:
+        app = self.make_app()
+        existing = "ARG BASE_IMAGE=ghcr.io/example/custom:latest\n# no FROM line here on purpose\n"
+        self.assertEqual(app.render_containerfile(existing), existing)
+
+    def test_write_project_files_writes_generated_cosign_pub(self) -> None:
+        app = self.make_app()
+        app.generated_cosign_pub = "PUBLIC KEY DATA"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            app.write_project_files(repo_dir, include_workflow=False)
+            self.assertEqual((repo_dir / "cosign.pub").read_text(), "PUBLIC KEY DATA\n")
 
     def test_select_repo_manual_entry_recovers_after_missing_repo(self) -> None:
         app = self.make_app()

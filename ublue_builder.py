@@ -50,6 +50,7 @@ ALLOWED_METHODS = {"containerfile"}
 PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
 COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 SERVICE_TOKEN_RE = re.compile(r"^[A-Za-z0-9@._:+-]+$")
+FROM_LINE_RE = re.compile(r"^(\s*FROM(?:\s+--platform=\S+)?\s+)(\S+)(.*)$", flags=re.IGNORECASE)
 # GitHub Actions should be pinned to immutable SHAs instead of floating tags.
 # The human-readable tag is kept as a comment so maintainers can still tell what
 # upstream version the pin came from.
@@ -866,9 +867,10 @@ class App:
             ) from exc
 
         if command_exists("cosign"):
-            self.gum.success("cosign found (signed builds available)")
+            self.gum.success("cosign found (new repos can configure signing automatically)")
         else:
-            raise SystemExit("cosign is required for signed images. Install it with: brew install cosign")
+            self.gum.warn("cosign not found (new repos and repos missing SIGNING_SECRET cannot configure signing yet)")
+            self.gum.hint("Install it with: brew install cosign")
 
         if command_exists("dnf5"):
             self.gum.success("dnf5 found (manual package checks available)")
@@ -1544,7 +1546,6 @@ class App:
         self.config.base_image_name = base
         matched = self.match_base_image(base)
         if matched:
-            self.config.base_image_uri = matched.image_uri
             self.config.base_image_name = matched.name
 
         self.gum.header("Scan Results")
@@ -1915,6 +1916,10 @@ class App:
                 self.gum.hint("This tool only updates repos it created itself. Pick a new repo name or manage that repo manually.")
             self.gum.enter_to_continue("Press Enter to go back to the review screen...")
             return False
+        if not command_exists("cosign"):
+            raise CommandError(
+                "cosign is required to create a new repo because this tool must generate SIGNING_SECRET. Install it with: brew install cosign"
+            )
         self.gum.spinner(
             f"Creating {owner}/{repo}...",
             ["gh", "repo", "create", repo, "--description", self.config.image_desc, "--public"],
@@ -2066,7 +2071,6 @@ class App:
             self.load_repo_config(tmpdir)
             self.config.repo_name = repo
             self.config.github_user = owner
-            self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
             if self.update_menu():
                 self.show_summary()
                 print()
@@ -2300,7 +2304,8 @@ class App:
     def push_update(self, owner: str, repo: str, repo_dir: Path) -> None:
         # The update path rewrites files in a temporary clone, shows the diff,
         # and only then asks for confirmation before pushing.
-        self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
+        self.generated_cosign_pub = None
+        self.config.signing_enabled = True
         self.write_project_files(repo_dir, include_workflow=True)
         diff = run(["git", "diff", "--stat"], cwd=repo_dir, check=False).stdout.strip()
         if not diff:
@@ -2317,6 +2322,8 @@ class App:
             self.gum.pager(self.pager_text_with_hint(full_diff))
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
+        self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
+        self.write_project_files(repo_dir, include_workflow=True)
         self.configure_temp_repo_git_identity(repo_dir)
         run(["git", "add", "-A"], cwd=repo_dir)
         run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir)
@@ -2387,9 +2394,15 @@ class App:
         if existing_text:
             lines = existing_text.splitlines()
             for index, line in enumerate(lines):
-                if line.startswith("FROM ") and "scratch" not in line:
-                    lines[index] = f"FROM {self.config.base_image_uri}"
-                    return ensure_trailing_newline("\n".join(lines))
+                match = FROM_LINE_RE.match(line)
+                if not match:
+                    continue
+                prefix, image, suffix = match.groups()
+                if image.lower() == "scratch":
+                    continue
+                lines[index] = f"{prefix}{self.config.base_image_uri}{suffix}"
+                return ensure_trailing_newline("\n".join(lines))
+            return ensure_trailing_newline(existing_text)
         return self.generate_containerfile()
 
     def patch_container_justfile(self, existing_text: str) -> str:
@@ -2482,6 +2495,8 @@ class App:
         build_sh = base_dir / "build_files/build.sh"
         build_sh.write_text(self.generate_build_sh())
         build_sh.chmod(0o755)
+        if self.generated_cosign_pub is not None:
+            (base_dir / "cosign.pub").write_text(ensure_trailing_newline(self.generated_cosign_pub))
 
         if justfile_path.exists():
             justfile_path.write_text(self.patch_container_justfile(justfile_path.read_text()))
