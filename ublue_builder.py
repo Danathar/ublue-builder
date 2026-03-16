@@ -594,80 +594,78 @@ class App:
     def landing_panel_width(self) -> int:
         return self.gum.content_width(max_width=92, reserve=10)
 
-    def banner(self) -> None:
-        panel_width = self.landing_panel_width()
+    def landing_card(
+        self,
+        title: str,
+        lines: Sequence[str],
+        *,
+        width: int,
+        border_foreground: int,
+        foreground: int = 252,
+        background: int = 236,
+    ) -> None:
+        # Keep the landing screen visually consistent without repeating the
+        # same gum style options for each intro card.
         print(
             self.gum.style(
-                f"uBlue Builder  v{VERSION}",
+                title,
                 "",
-                "Create and update GitHub-backed Universal Blue image repositories.",
-                "Beta terminal tool for beginner Bazzite, Aurora, and Bluefin users.",
-                align="center",
-                width=panel_width,
-                margin="1 2",
+                *lines,
+                align="left",
+                width=width,
+                margin="0 2",
                 padding="1 2",
-                foreground=117,
-                border_foreground=117,
-                border="double",
+                foreground=foreground,
+                background=background,
+                border_foreground=border_foreground,
+                border="rounded",
             )
         )
+
+    def banner(self) -> None:
+        panel_width = self.landing_panel_width()
+        print()
+        print(self.gum.style(f"uBlue Builder  v{VERSION}", align="center", width=panel_width, foreground=117, bold=True))
+        print(self.gum.style("GitHub-backed Universal Blue image repo builder", align="center", width=panel_width, foreground=252))
+        print(self.gum.style("for beginner Bazzite, Aurora, and Bluefin users", align="center", width=panel_width, foreground=252))
+        print()
 
     def startup_requirements(self) -> None:
         # This screen exists because GitHub is not optional for the beginner
         # tool. Telling users that up front is better than failing halfway
         # through the wizard after they already entered data.
         info_width = self.landing_panel_width()
-        print(
-            self.gum.style(
-                "Before You Start",
+        self.landing_card(
+            "Before You Start",
+            [
+                "GitHub account required",
+                "Log in first: gh auth login",
                 "",
-                "GitHub",
-                "You need a GitHub account to use this tool.",
-                "Log in with the GitHub CLI first:",
-                "",
-                "gh auth login",
-                "",
-                "Template Reference",
-                "This tool stores your image repo on GitHub",
-                "and uses GitHub Actions to build it.",
-                "",
-                "Official template repo:",
+                "Official template repo",
                 "https://github.com/ublue-os/image-template",
-                "This utility uses a bundled snapshot of that template.",
-                "It may not always match the latest upstream version.",
-                "The maintainer aims to keep it aligned with upstream.",
-                align="left",
-                width=info_width,
-                margin="0 2",
-                padding="1 2",
-                foreground=117,
-                border_foreground=117,
-                border="rounded",
-            )
+                "Uses a bundled snapshot of that template.",
+                "Snapshot may lag behind upstream.",
+                "Maintainer aims to keep it aligned.",
+            ],
+            width=info_width,
+            border_foreground=117,
         )
         print()
-        print(
-            self.gum.style(
-                "Important",
+        self.landing_card(
+            "Important",
+            [
+                "Third-party tool",
+                "Not an official Universal Blue utility",
+                "Not sanctioned by the Universal Blue project",
                 "",
-                "This is a third-party tool.",
-                "It is not an official Universal Blue utility.",
-                "It is not sanctioned by the Universal Blue project.",
-                "",
-                "This tool is provided as-is.",
-                "Review its changes before you push them.",
-                "Keep backups where appropriate.",
-                "The maintainer is not responsible for repository damage,",
-                "data loss, failed builds, system changes, or other problems",
-                "caused by using this software.",
-                align="left",
-                width=info_width,
-                margin="0 2",
-                padding="1 2",
-                foreground=11,
-                border_foreground=11,
-                border="rounded",
-            )
+                "Provided as-is",
+                "Review changes before you push",
+                "Keep backups where appropriate",
+                "Repository damage, data loss, failed builds,",
+                "and system changes are your risk.",
+            ],
+            width=info_width,
+            border_foreground=214,
         )
         print()
         self.gum.enter_to_continue("Press Enter to start the preflight checks...")
