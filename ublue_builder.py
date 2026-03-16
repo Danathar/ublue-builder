@@ -1326,6 +1326,17 @@ class App:
     def clone_repo(self, owner: str, repo: str, target: Path) -> None:
         self.gum.spinner(f"Cloning {owner}/{repo}...", ["gh", "repo", "clone", f"{owner}/{repo}", str(target)])
 
+    def configure_temp_repo_git_identity(self, repo_dir: Path) -> None:
+        # Temp repos are created in scratch directories, so they cannot rely on
+        # the user's global git config already being set. We always configure a
+        # local author identity before committing so first-time users do not hit
+        # "please tell me who you are" commit failures.
+        login = self.github_user or self.config.github_user or "ublue-builder"
+        name = self.github_user or self.config.github_user or "uBlue Builder"
+        email = f"{login}@users.noreply.github.com"
+        run(["git", "config", "user.name", name], cwd=repo_dir)
+        run(["git", "config", "user.email", email], cwd=repo_dir)
+
     def copy_template_snapshot(self, target: Path, *, repo: str, source_dir: Path) -> None:
         # We copy from a bundled snapshot instead of pulling a live template from
         # GitHub at runtime. That makes the tool deterministic and avoids breakage
@@ -1503,9 +1514,10 @@ class App:
                 branch = self.repo_default_branch(owner, repo)
                 run(["git", "init", "-b", branch], cwd=tmpdir)
                 run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
+                self.configure_temp_repo_git_identity(tmpdir)
                 self.write_project_files(tmpdir, include_workflow=True)
                 run(["git", "add", "-A"], cwd=tmpdir)
-                run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir, check=False)
+                run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir)
                 run(["git", "push", "origin", "HEAD"], cwd=tmpdir, capture=False)
                 pushed = True
         except Exception:
@@ -1514,7 +1526,15 @@ class App:
                 # first push. If anything later fails, we delete that empty repo
                 # so the user can retry cleanly instead of dealing with leftovers.
                 self.gum.warn("Setup failed after the GitHub repo was created. Removing the empty repo so you can try again cleanly.")
-                run(["gh", "repo", "delete", f"{owner}/{repo}", "--yes"], check=False, capture=False)
+                delete_proc = run(["gh", "repo", "delete", f"{owner}/{repo}", "--yes"], check=False)
+                if delete_proc.returncode != 0:
+                    self.gum.warn("I could not remove the new GitHub repo automatically.")
+                    detail = "\n".join(part for part in [delete_proc.stdout, delete_proc.stderr] if part).strip()
+                    if "delete_repo" in detail:
+                        self.gum.hint("Your GitHub token needs the delete_repo scope to remove repos automatically.")
+                        self.gum.hint("Delete the repo manually, or run: gh auth refresh -h github.com -s delete_repo")
+                    else:
+                        self.gum.hint("Delete the repo manually on GitHub before trying again.")
             raise
 
         image_uri = f"ghcr.io/{owner}/{repo}:latest"
@@ -1977,8 +1997,9 @@ class App:
             self.gum.pager(self.pager_text_with_hint(full_diff))
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
+        self.configure_temp_repo_git_identity(repo_dir)
         run(["git", "add", "-A"], cwd=repo_dir)
-        run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir, check=False)
+        run(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], cwd=repo_dir)
         run(["git", "push", "origin", "HEAD"], cwd=repo_dir, capture=False)
         self.gum.success(f"Pushed changes to {owner}/{repo}.")
         self.gum.enter_to_continue("Press Enter to return to the main menu...")

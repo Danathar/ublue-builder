@@ -16,6 +16,7 @@ from ublue_builder import (
     Config,
     Gum,
     ScreenBack,
+    VERSION,
     config_from_state_payload,
 )
 
@@ -478,6 +479,145 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaisesRegex(CommandError, "signing failed"):
                     app.do_build()
         self.assertIn(["gh", "repo", "delete", "example/test-image", "--yes"], run_calls)
+
+    def test_do_build_sets_local_git_identity_before_initial_commit(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def header(self, _title: str) -> None:
+                pass
+
+            def spinner(self, _title, _command, *, cwd=None) -> None:
+                pass
+
+            def warn(self, _message: str) -> None:
+                pass
+
+            def hint(self, _message: str) -> None:
+                pass
+
+            def style(self, *lines, **_kwargs) -> str:
+                return "\n".join(lines)
+
+            def content_width(self, reserve: int = 0) -> int:
+                return 100 - reserve
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+        app.gum = GumStub()
+
+        run_calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            run_calls.append(list(args))
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with patch("ublue_builder.run", side_effect=fake_run):
+            with patch.object(app, "ensure_signing_ready", return_value=True):
+                with patch.object(app, "repo_default_branch", return_value="main"):
+                    with patch.object(app, "seed_project_template", return_value=None):
+                        with patch.object(app, "write_project_files", return_value=None):
+                            self.assertTrue(app.do_build())
+
+        self.assertIn(["git", "config", "user.name", "example"], run_calls)
+        self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
+        self.assertIn(["git", "commit", "-m", "Initial image configuration via ublue-builder"], run_calls)
+
+    def test_do_build_explains_manual_cleanup_when_delete_scope_is_missing(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, str]] = []
+
+            def header(self, _title: str) -> None:
+                pass
+
+            def spinner(self, _title, _command, *, cwd=None) -> None:
+                pass
+
+            def warn(self, message: str) -> None:
+                self.messages.append(("warn", message))
+
+            def hint(self, message: str) -> None:
+                self.messages.append(("hint", message))
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+        app.gum = GumStub()
+
+        def fake_run(args, **_kwargs):
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            if args[:3] == ["gh", "repo", "delete"]:
+                return subprocess.CompletedProcess(
+                    list(args),
+                    1,
+                    "",
+                    'HTTP 403: Must have admin rights to Repository.\nThis API operation needs the "delete_repo" scope.',
+                )
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with patch("ublue_builder.run", side_effect=fake_run):
+            with patch.object(app, "ensure_signing_ready", side_effect=CommandError("signing failed")):
+                with self.assertRaisesRegex(CommandError, "signing failed"):
+                    app.do_build()
+
+        self.assertTrue(any("delete_repo scope" in message for level, message in app.gum.messages if level == "hint"))
+
+    def test_push_update_sets_local_git_identity_before_commit(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+        app.config.github_user = "example"
+
+        class GumStub:
+            def __init__(self) -> None:
+                self.confirm_results = iter([False, True])
+
+            def confirm(self, _prompt: str, default: bool = False) -> bool:
+                return next(self.confirm_results)
+
+            def success(self, _message: str) -> None:
+                pass
+
+            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
+                pass
+
+            def pager(self, _text: str) -> None:
+                pass
+
+        app.gum = GumStub()
+
+        run_calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            run_calls.append(list(args))
+            if list(args) == ["git", "diff", "--stat"]:
+                return subprocess.CompletedProcess(list(args), 0, " build_files/build.sh | 1 +\n", "")
+            if list(args) == ["git", "diff"]:
+                return subprocess.CompletedProcess(list(args), 0, "diff --git a/x b/x\n", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            with patch("ublue_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready", return_value=True):
+                    with patch.object(app, "write_project_files", return_value=None):
+                        app.push_update("example", "test-image", repo_dir)
+
+        self.assertIn(["git", "config", "user.name", "example"], run_calls)
+        self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
+        self.assertIn(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], run_calls)
 
     def test_create_new_image_starts_from_fresh_config(self) -> None:
         app = self.make_app()
