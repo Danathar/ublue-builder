@@ -407,6 +407,9 @@ class BuilderTests(unittest.TestCase):
             def header(self, _title: str) -> None:
                 pass
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, _message: str) -> None:
                 pass
 
@@ -443,6 +446,9 @@ class BuilderTests(unittest.TestCase):
             def header(self, *_args, **_kwargs) -> None:
                 pass
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, *_args, **_kwargs) -> None:
                 pass
 
@@ -469,6 +475,9 @@ class BuilderTests(unittest.TestCase):
                 self.choices = ["Remove COPR repositories", "Remove enabled services", "Continue to review"]
 
             def header(self, *_args, **_kwargs) -> None:
+                pass
+
+            def instruction(self, _message: str) -> None:
                 pass
 
             def hint(self, *_args, **_kwargs) -> None:
@@ -499,6 +508,9 @@ class BuilderTests(unittest.TestCase):
             def header(self, *_args, **_kwargs) -> None:
                 pass
 
+            def instruction(self, _message: str) -> None:
+                pass
+
             def hint(self, message: str) -> None:
                 self.hints.append(message)
 
@@ -521,6 +533,9 @@ class BuilderTests(unittest.TestCase):
                 self.prompts: list[str] = []
 
             def header(self, _title: str) -> None:
+                pass
+
+            def instruction(self, _message: str) -> None:
                 pass
 
             def hint(self, _message: str) -> None:
@@ -558,6 +573,9 @@ class BuilderTests(unittest.TestCase):
                 self.prompts: list[str] = []
 
             def header(self, _title: str) -> None:
+                pass
+
+            def instruction(self, _message: str) -> None:
                 pass
 
             def hint(self, _message: str) -> None:

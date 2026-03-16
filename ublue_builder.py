@@ -737,6 +737,37 @@ class App:
     def requested_packages_note(self) -> str:
         return "Selected packages are what this repo will attempt to add, even if some are already present in the chosen base image."
 
+    def menu_section(self, title: str, *lines: str) -> None:
+        self.gum.instruction(title)
+        for line in lines:
+            self.gum.hint(line)
+
+    def render_package_menu_intro(
+        self,
+        *,
+        packages_empty: str,
+        packages_label: str = "Packages",
+        include_copr: bool = False,
+        include_services: bool = False,
+        next_step_hint: str,
+    ) -> None:
+        self.menu_section(
+            "Package Entry",
+            "Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.",
+            self.requested_packages_note(),
+        )
+        print()
+        current_lines = [
+            f"{packages_label}: {self.summarize_selection(self.config.packages, empty=packages_empty, verb='selected')}"
+        ]
+        if include_copr:
+            current_lines.append(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
+        if include_services:
+            current_lines.append(f"Services: {self.summarize_selection(self.config.services, empty='None', verb='enabled')}")
+        self.menu_section("Current Selections", *current_lines)
+        print()
+        self.menu_section("Next Step", next_step_hint)
+
     def update_task_choices(self) -> list[tuple[str, str]]:
         return [
             ("Packages", self.summarize_selection(self.config.packages, empty="No packages", verb="selected")),
@@ -1061,12 +1092,12 @@ class App:
             else:
                 self.gum.header("Software Selection")
             self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
-            self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
-            self.gum.hint(self.requested_packages_note())
-            self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
-            self.gum.hint(f"COPR repositories: {self.summarize_selection(self.config.copr_repos, empty='None', verb='added')}")
-            self.gum.hint(f"Services: {self.summarize_selection(self.config.services, empty='None', verb='enabled')}")
-            self.gum.hint("Choose Continue to review when you are finished, or use the remove options to undo package, COPR, or service choices.")
+            self.render_package_menu_intro(
+                packages_empty="No packages yet",
+                include_copr=True,
+                include_services=True,
+                next_step_hint="Choose Continue to review when you are finished, or use the remove options to undo package, COPR, or service choices.",
+            )
             print()
             selection = self.gum.choose(
                 [
@@ -1112,11 +1143,18 @@ class App:
         # for obvious mistakes before the GitHub build does the final check.
         self.gum.header("Add Packages")
         print()
-        self.gum.hint("Enter exact RPM package names separated by spaces or newlines.")
-        self.gum.hint("Use package search instead if you only know part of the name.")
-        self.gum.hint("This tool will try to catch obvious package-name mistakes here first.")
-        self.gum.hint("The GitHub build is still the final check.")
-        self.gum.hint("Leave this empty if you want to go back without adding anything.")
+        self.menu_section(
+            "What To Enter",
+            "Enter exact RPM package names separated by spaces or newlines.",
+            "Use package search instead if you only know part of the name.",
+        )
+        print()
+        self.menu_section(
+            "Validation",
+            "This tool will try to catch obvious package-name mistakes here first.",
+            "The GitHub build is still the final check.",
+            "Leave this empty if you want to go back without adding anything.",
+        )
         print()
         raw = self.gum.write(placeholder="Enter package names...", height=6, width=self.gum.form_width(max_width=110))
         packages = [token.strip(",") for token in raw.split() if token.strip(",")]
@@ -1136,8 +1174,11 @@ class App:
     def search_packages(self) -> None:
         while True:
             self.gum.header("Search Packages")
-            self.gum.hint("Search package names when you only know part of the RPM name.")
-            self.gum.hint("Search uses local DNF metadata. If it is unavailable here, use exact-name entry instead.")
+            self.menu_section(
+                "Search Tips",
+                "Search package names when you only know part of the RPM name.",
+                "Search uses local DNF metadata. If it is unavailable here, use exact-name entry instead.",
+            )
             print()
             term = self.gum.input(
                 prompt="Search term: ",
@@ -1218,9 +1259,12 @@ class App:
         # COPR is powerful but advanced. The UI copy here tries to frame it as
         # optional so new users do not feel forced to understand it immediately.
         self.gum.header("Add COPR Repository")
-        self.gum.hint("COPR is an extra community package source outside the normal Fedora and Universal Blue repos.")
-        self.gum.hint("Most users can skip this. Only use it if you know a package you need comes from that COPR.")
-        self.gum.hint("Example: kwizart/fedy. Leave the repo field empty if you want to go back.")
+        self.menu_section(
+            "When To Use COPR",
+            "COPR is an extra community package source outside the normal Fedora and Universal Blue repos.",
+            "Most users can skip this. Only use it if you know a package you need comes from that COPR.",
+            "Example: kwizart/fedy. Leave the repo field empty if you want to go back.",
+        )
         print()
         repo = self.gum.input(
             prompt="COPR repo: ",
@@ -1235,7 +1279,10 @@ class App:
             return
         proposed_copr_repos = unique([*self.config.copr_repos, repo])
         print()
-        self.gum.hint("Enter the package names you want from this COPR. Leave it empty if you only want to add the repo.")
+        self.menu_section(
+            "Optional Package Entry",
+            "Enter the package names you want from this COPR. Leave it empty if you only want to add the repo.",
+        )
         pkgs = self.gum.input(
             prompt="Packages: ",
             placeholder="package1 package2",
@@ -1254,9 +1301,12 @@ class App:
         # with common examples before dropping to raw systemd unit names.
         while True:
             self.gum.header("Enable Services")
-            self.gum.hint("Services are background features that start automatically when the image boots.")
-            self.gum.hint("Most users can skip this unless they know they want something like SSH or Tailscale always on.")
-            self.gum.hint("Choose a common service, type another one manually, or go back.")
+            self.menu_section(
+                "What This Does",
+                "Services are background features that start automatically when the image boots.",
+                "Most users can skip this unless they know they want something like SSH or Tailscale always on.",
+                "Choose a common service, type another one manually, or go back.",
+            )
             print()
             try:
                 choice = self.gum.choose(
@@ -2049,10 +2099,10 @@ class App:
         while True:
             self.gum.header("Edit Packages")
             self.gum.hint("Choose how you want to change packages.")
-            self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
-            self.gum.hint(self.requested_packages_note())
-            self.gum.hint(f"Current packages: {self.summarize_selection(self.config.packages, empty='None selected', verb='selected')}")
-            self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
+            self.render_package_menu_intro(
+                packages_empty="None selected",
+                next_step_hint="Choose Back to return to the update menu and keep the changes you already made here.",
+            )
             print()
             try:
                 choice = self.gum.choose(
@@ -2077,8 +2127,11 @@ class App:
     def manage_copr_repos(self) -> None:
         while True:
             self.gum.header("Edit COPR Repositories")
-            self.gum.hint("Choose how you want to change COPR repositories.")
-            self.gum.hint("Choose Back to return to the update menu and keep the changes you already made here.")
+            self.menu_section(
+                "Next Step",
+                "Choose how you want to change COPR repositories.",
+                "Choose Back to return to the update menu and keep the changes you already made here.",
+            )
             print()
             try:
                 choice = self.gum.choose(
@@ -2133,7 +2186,10 @@ class App:
     def manage_services(self) -> None:
         self.gum.header("Edit Services")
         self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
-        self.gum.hint("Choose Back to return to the previous menu and keep the changes you already made here.")
+        self.menu_section(
+            "Next Step",
+            "Choose Back to return to the previous menu and keep the changes you already made here.",
+        )
         print()
         try:
             choice = self.gum.choose(["Add services", "Remove services", "Back"], height=5)
@@ -2147,9 +2203,12 @@ class App:
 
     def manage_removed_packages(self) -> None:
         self.gum.header("Edit Removed Base Packages")
-        self.gum.hint("These are packages you want removed from the base image.")
-        self.gum.hint("Choose Add to type package names to remove, or Remove to stop removing packages you already listed.")
-        self.gum.hint("Choose Back to return to the update menu. Changes are kept automatically.")
+        self.menu_section(
+            "What This Does",
+            "These are packages you want removed from the base image.",
+            "Choose Add to type package names to remove, or Remove to stop removing packages you already listed.",
+            "Choose Back to return to the update menu. Changes are kept automatically.",
+        )
         print()
         try:
             choice = self.gum.choose(["Add package names to remove", "Stop removing listed packages", "Back"], height=5)
