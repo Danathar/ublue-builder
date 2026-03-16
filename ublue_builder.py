@@ -591,7 +591,11 @@ class App:
         # package picks from the previous action the user ran in this session.
         return Config(method="containerfile", github_user=self.github_user)
 
+    def landing_panel_width(self) -> int:
+        return self.gum.content_width(max_width=92, reserve=10)
+
     def banner(self) -> None:
+        panel_width = self.landing_panel_width()
         print(
             self.gum.style(
                 f"uBlue Builder  v{VERSION}",
@@ -599,7 +603,7 @@ class App:
                 "Create and update GitHub-backed Universal Blue image repositories.",
                 "Beta terminal tool for beginner Bazzite, Aurora, and Bluefin users.",
                 align="center",
-                width=self.gum.content_width(reserve=8),
+                width=panel_width,
                 margin="1 2",
                 padding="1 2",
                 foreground=117,
@@ -612,34 +616,56 @@ class App:
         # This screen exists because GitHub is not optional for the beginner
         # tool. Telling users that up front is better than failing halfway
         # through the wizard after they already entered data.
+        info_width = self.landing_panel_width()
         print(
             self.gum.style(
                 "Before You Start",
                 "",
+                "GitHub",
                 "You need a GitHub account to use this tool.",
-                "You should also log in with the GitHub CLI first:",
+                "Log in with the GitHub CLI first:",
                 "",
                 "gh auth login",
                 "",
-                "This tool stores your image repo on GitHub and uses GitHub Actions to build it.",
-                "It uses a bundled snapshot of the official Universal Blue repo template:",
-                "https://github.com/ublue-os/image-template",
-                "That snapshot may not always be the latest upstream version,",
-                "though the maintainer aims to keep this utility aligned with it.",
+                "Template Reference",
+                "This tool stores your image repo on GitHub",
+                "and uses GitHub Actions to build it.",
                 "",
-                "Important:",
-                "This is a third-party tool.",
-                "It is not an official Universal Blue utility and is not sanctioned by the Universal Blue project.",
-                "This tool is provided as-is.",
-                "Review its changes before you push them, and keep backups where appropriate.",
-                "The maintainer is not responsible for repository damage, data loss, failed builds,",
-                "system changes, or other problems caused by using this software.",
+                "Official template repo:",
+                "https://github.com/ublue-os/image-template",
+                "This utility uses a bundled snapshot of that template.",
+                "It may not always match the latest upstream version.",
+                "The maintainer aims to keep it aligned with upstream.",
                 align="left",
-                width=self.gum.content_width(max_width=100, reserve=8),
+                width=info_width,
                 margin="0 2",
                 padding="1 2",
                 foreground=117,
                 border_foreground=117,
+                border="rounded",
+            )
+        )
+        print()
+        print(
+            self.gum.style(
+                "Important",
+                "",
+                "This is a third-party tool.",
+                "It is not an official Universal Blue utility.",
+                "It is not sanctioned by the Universal Blue project.",
+                "",
+                "This tool is provided as-is.",
+                "Review its changes before you push them.",
+                "Keep backups where appropriate.",
+                "The maintainer is not responsible for repository damage,",
+                "data loss, failed builds, system changes, or other problems",
+                "caused by using this software.",
+                align="left",
+                width=info_width,
+                margin="0 2",
+                padding="1 2",
+                foreground=11,
+                border_foreground=11,
                 border="rounded",
             )
         )
