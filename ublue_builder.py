@@ -34,6 +34,7 @@ DEFAULT_REPO_NAME = "my-ublue-image"
 DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 MAX_UI_WIDTH = 120
 ACCENT_COLOR = 117
+CONTROLS_COLOR = 214
 PACKAGE_SEARCH_LIMIT = 40
 MANAGED_REPO_WARNING = "If you hand-edit a repo after this tool creates or manages it, stop using this tool for that repo."
 MANAGED_REPO_HINT = (
@@ -378,7 +379,7 @@ class Gum:
         print(self.style(message, foreground=ACCENT_COLOR, bold=True, width=self.content_width()))
 
     def controls(self, *parts: str) -> None:
-        self.instruction("Keys: " + " | ".join(parts))
+        print(self.style("Keys: " + " | ".join(parts), foreground=CONTROLS_COLOR, bold=True, width=self.content_width()))
         print()
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
