@@ -94,7 +94,7 @@ class BuilderTests(unittest.TestCase):
     def test_base_image_picker_is_limited_to_beginner_images(self) -> None:
         self.assertEqual(
             [image.key for image in BASE_IMAGES],
-            ["bazzite", "bazzite-dx", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
+            ["bazzite", "bazzite-gnome", "bazzite-dx", "bazzite-dx-gnome", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
         )
 
     def test_validate_config_rejects_unsupported_base_image(self) -> None:
@@ -995,7 +995,7 @@ class BuilderTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(app.config.packages, [])
         self.assertEqual(app.config.removed_packages, [])
-        self.assertEqual(app.config.base_image_name, "Bazzite")
+        self.assertEqual(app.config.base_image_name, "Bazzite (KDE)")
         self.assertEqual(app.config.github_user, "example")
 
     def test_select_repo_manual_entry_recovers_after_missing_repo(self) -> None:
