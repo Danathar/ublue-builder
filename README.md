@@ -19,7 +19,11 @@ This project is currently **0.8 beta** and is **not fully tested yet**. Use it c
 
 This tool creates and maintains a GitHub repository that builds a custom Universal Blue image from an official Universal Blue base image.
 
-It currently focuses on the beginner-friendly Containerfile path and uses the official `ublue-os/image-template` snapshot bundled with this project.
+It currently focuses on the beginner-friendly Containerfile path and uses a bundled snapshot of the official `ublue-os/image-template` repo template:
+
+https://github.com/ublue-os/image-template
+
+That bundled snapshot may not always match the latest upstream version, though the maintainer aims to keep this utility aligned with the latest version of that template.
 
 ## What It Does
 
