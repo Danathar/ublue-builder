@@ -379,6 +379,7 @@ class Gum:
 
     def controls(self, *parts: str) -> None:
         self.instruction("Keys: " + " | ".join(parts))
+        print()
 
     def confirm(self, prompt: str, *, default: bool = True) -> bool:
         args = ["gum", "confirm", "--no-show-help", prompt]
@@ -938,7 +939,6 @@ class App:
         while True:
             self.gum.header("Main Menu")
             self.gum.controls("Up/Down move", "Enter choose", "Esc quit", "Ctrl+C quit")
-            print()
             try:
                 action = self.gum.choose(
                     [
@@ -1334,7 +1334,6 @@ class App:
     def select_common_services(self) -> None:
         self.gum.header("Common Services")
         self.gum.controls("Up/Down move", "x select", "Enter save", "Esc back", "Ctrl+C quit")
-        print()
         label_to_service = {f"{label} ({service})": service for label, service in COMMON_SERVICES}
         options = list(label_to_service)
         selected = [label for label, service in label_to_service.items() if service in self.config.services]
