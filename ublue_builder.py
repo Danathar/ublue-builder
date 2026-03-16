@@ -35,6 +35,10 @@ DEFAULT_GITHUB_BUILD_CRON = "05 10 * * *"
 MAX_UI_WIDTH = 120
 ACCENT_COLOR = 117
 PACKAGE_SEARCH_LIMIT = 40
+MANAGED_REPO_WARNING = "If you hand-edit a repo after this tool creates or manages it, stop using this tool for that repo."
+MANAGED_REPO_HINT = (
+    f"Future updates use {STATE_FILE} as the source of truth and rewrite managed files such as README.md and build_files/build.sh."
+)
 CONTAINERFILE_TEMPLATE_REPO = "ublue-os/image-template"
 TEMPLATE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "template_snapshots"
 CONTAINERFILE_TEMPLATE_DIR = TEMPLATE_SNAPSHOT_DIR / "containerfile"
@@ -711,6 +715,10 @@ class App:
             ("Services", self.summarize_selection(self.config.services, empty="No services", verb="enabled")),
             ("Removed base packages", self.summarize_selection(self.config.removed_packages, empty="None", verb="selected")),
         ]
+
+    def show_managed_repo_warning(self) -> None:
+        self.gum.warn(MANAGED_REPO_WARNING)
+        self.gum.hint(MANAGED_REPO_HINT)
 
     def preflight(self) -> None:
         # Preflight is intentionally blunt: it checks the tools this app depends
@@ -1829,6 +1837,7 @@ class App:
             )
         )
         print()
+        self.show_managed_repo_warning()
         self.gum.enter_to_continue("Press Enter to return to the main menu...")
         return True
 
@@ -2264,6 +2273,8 @@ class App:
             return
         print(diff)
         print()
+        self.show_managed_repo_warning()
+        print()
         if self.gum.confirm("View full diff?", default=False):
             full_diff = run(["git", "diff"], cwd=repo_dir, check=False).stdout
             self.gum.pager(self.pager_text_with_hint(full_diff))
@@ -2635,6 +2646,14 @@ class App:
             f"| Base Image URI | `{self.config.base_image_uri}` |",
             f"| Published Image | `{image_ref}` |",
             "| Build Method | `Containerfile` |",
+            "",
+            "## Managed By ublue-builder",
+            "",
+            f"This repo is managed by `ublue-builder`. `{STATE_FILE}` is the saved settings file and source of truth for future updates.",
+            "",
+            "If you hand-edit this repo after `ublue-builder` creates or manages it, stop using `ublue-builder` for this repo.",
+            "",
+            "Later tool-driven updates rewrite managed files and can overwrite manual changes, especially `README.md` and `build_files/build.sh`.",
             "",
             "## Installed Packages",
             "",
