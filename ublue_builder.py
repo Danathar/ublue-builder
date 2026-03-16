@@ -2450,6 +2450,7 @@ class App:
         current_step = ""
         has_job_cosign = any(re.fullmatch(r" {6}COSIGN_PRIVATE_KEY: \$\{\{ secrets\.SIGNING_SECRET \}\}", line) for line in lines)
         state_ignore_present = any(STATE_FILE in line for line in lines)
+        paths_ignore_inserted = False
         for line in lines:
             line = pin_action_uses_line(line)
             stripped = line.strip()
@@ -2457,9 +2458,26 @@ class App:
                 indent = line[: len(line) - len(line.lstrip())]
                 output.append(f"{indent}- cron: '{DEFAULT_GITHUB_BUILD_CRON}'")
                 continue
-            if stripped in {"- '**/README.md'", '- "**/README.md"'} and not state_ignore_present:
+            if stripped.startswith("paths-ignore:") and not state_ignore_present and not paths_ignore_inserted:
+                output.append(line)
+                inline_match = re.match(r"^(\s*paths-ignore:\s*)\[(.*)\](\s*)$", line)
+                if inline_match:
+                    prefix, items, suffix = inline_match.groups()
+                    items = items.strip()
+                    if items:
+                        output[-1] = f"{prefix}[{items}, '{STATE_FILE}']{suffix}"
+                    else:
+                        output[-1] = f"{prefix}['{STATE_FILE}']{suffix}"
+                    paths_ignore_inserted = True
+                    continue
+                paths_ignore_indent = line[: len(line) - len(line.lstrip())] + "  "
+                output.append(f"{paths_ignore_indent}- '{STATE_FILE}'")
+                paths_ignore_inserted = True
+                continue
+            if stripped in {"- '**/README.md'", '- "**/README.md"'} and not state_ignore_present and not paths_ignore_inserted:
                 output.append(line)
                 output.append(f"{line[: len(line) - len(line.lstrip())]}- '{STATE_FILE}'")
+                paths_ignore_inserted = True
                 continue
             if stripped.startswith("IMAGE_DESC:"):
                 output.append(f"  IMAGE_DESC: {yaml_scalar(self.config.image_desc)}")
@@ -2604,9 +2622,13 @@ class App:
             "name: Build container image",
             "on:",
             "  pull_request:",
+            "    branches:",
+            "      - main",
             "  schedule:",
             f"    - cron: '{DEFAULT_GITHUB_BUILD_CRON}'",
             "  push:",
+            "    branches:",
+            "      - main",
             f"    paths-ignore: ['**/README.md', '{STATE_FILE}']",
             "  workflow_dispatch:",
             "",
@@ -2694,6 +2716,8 @@ class App:
                     "      - name: Install Cosign",
                     f"        uses: {pinned_action('sigstore/cosign-installer')}",
                     f"        if: {sign_if}",
+                    "        with:",
+                    "          cosign-release: 'v2.6.1'",
                     "",
                     "      - name: Sign container image",
                     f"        if: {sign_if}",

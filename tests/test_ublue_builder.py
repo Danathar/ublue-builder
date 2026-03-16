@@ -85,6 +85,24 @@ class BuilderTests(unittest.TestCase):
         self.assertIn(ACTION_PINS["sigstore/cosign-installer"][0], patched)
         self.assertIn("env.COSIGN_PRIVATE_KEY != ''", patched)
 
+    def test_patch_container_workflow_handles_inline_paths_ignore(self) -> None:
+        app = self.make_app()
+        workflow = textwrap.dedent(
+            """\
+            name: Build container image
+            on:
+              push:
+                paths-ignore: ['**/README.md']
+            jobs:
+              build_push:
+                steps:
+                  - name: Checkout
+                    uses: actions/checkout@v4
+            """
+        )
+        patched = app.patch_container_workflow(workflow)
+        self.assertIn("paths-ignore: ['**/README.md', '.ublue-builder.json']", patched)
+
     def test_validate_config_rejects_unsafe_package_token(self) -> None:
         app = self.make_app()
         app.config.packages = ["tmux", "bad;rm"]
@@ -1269,6 +1287,14 @@ class BuilderTests(unittest.TestCase):
             repo_dir = Path(tmp)
             app.write_project_files(repo_dir, include_workflow=False)
             self.assertEqual((repo_dir / "cosign.pub").read_text(), "PUBLIC KEY DATA\n")
+
+    def test_generate_container_workflow_limits_events_to_main_and_pins_cosign_release(self) -> None:
+        app = self.make_app()
+        app.config.signing_enabled = True
+        workflow = app.generate_container_workflow()
+        self.assertIn("  pull_request:\n    branches:\n      - main", workflow)
+        self.assertIn("  push:\n    branches:\n      - main", workflow)
+        self.assertIn("          cosign-release: 'v2.6.1'", workflow)
 
     def test_select_repo_manual_entry_recovers_after_missing_repo(self) -> None:
         app = self.make_app()
