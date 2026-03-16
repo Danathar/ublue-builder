@@ -1016,11 +1016,11 @@ class App:
     def select_packages(self, *, step: int | None = None, total_steps: int | None = None) -> None:
         # "Software" is a menu of smaller editing tasks. Each option mutates the
         # same Config object, so the review screen can always show current state.
-        if step is not None and total_steps is not None:
-            self.show_step_header("Software Selection", step=step, total_steps=total_steps)
-        else:
-            self.gum.header("Software Selection")
         while True:
+            if step is not None and total_steps is not None:
+                self.show_step_header("Software Selection", step=step, total_steps=total_steps)
+            else:
+                self.gum.header("Software Selection")
             self.gum.controls("Up/Down move", "Enter choose", "Esc back", "Ctrl+C quit")
             self.gum.hint("Search package names when you only know part of the RPM name. Use exact-name entry when you already know it.")
             self.gum.hint(f"Packages: {self.summarize_selection(self.config.packages, empty='No packages yet', verb='selected')}")
@@ -1064,6 +1064,7 @@ class App:
         # Package entry is intentionally simple now: the user types the RPM
         # package names they want, and the tool does a lightweight local check
         # for obvious mistakes before the GitHub build does the final check.
+        self.gum.header("Add Packages")
         print()
         self.gum.hint("Enter exact RPM package names separated by spaces or newlines.")
         self.gum.hint("Use package search instead if you only know part of the name.")
@@ -1254,6 +1255,7 @@ class App:
         self.gum.success(f"Total services configured: {len(self.config.services)}")
 
     def add_services_manually(self) -> None:
+        self.gum.header("Add Services Manually")
         print()
         self.gum.hint("Type systemd service names like sshd.service or tailscaled.service.")
         self.gum.hint("Leave this empty if you want to go back without adding anything.")
@@ -2196,6 +2198,7 @@ class App:
         if not values:
             self.gum.warn("Nothing to remove.")
             return values
+        self.gum.header(header)
         self.gum.controls("Up/Down move", "x select", "Enter save", "Esc back", "Ctrl+C quit")
         self.gum.hint("Leave everything unselected if you want to keep everything.")
         print()
@@ -2204,7 +2207,6 @@ class App:
                 values,
                 no_limit=True,
                 height=20,
-                header=header,
                 selected_prefix="[x] ",
                 unselected_prefix="[ ] ",
             )

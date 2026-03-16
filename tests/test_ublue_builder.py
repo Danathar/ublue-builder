@@ -453,6 +453,9 @@ class BuilderTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.prompts: list[str] = []
 
+            def header(self, _title: str) -> None:
+                pass
+
             def hint(self, _message: str) -> None:
                 pass
 
@@ -486,6 +489,9 @@ class BuilderTests(unittest.TestCase):
         class GumStub:
             def __init__(self) -> None:
                 self.prompts: list[str] = []
+
+            def header(self, _title: str) -> None:
+                pass
 
             def hint(self, _message: str) -> None:
                 pass
