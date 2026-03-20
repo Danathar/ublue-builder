@@ -5,6 +5,7 @@ import tempfile
 import textwrap
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +24,7 @@ from ublue_builder import (
     STATE_FILE,
     VERSION,
     config_from_state_payload,
+    format_daily_rebuild_note,
 )
 
 
@@ -102,6 +104,25 @@ class BuilderTests(unittest.TestCase):
     def test_config_from_state_payload_rejects_non_string_list_item(self) -> None:
         with self.assertRaisesRegex(ValueError, "packages must contain only strings"):
             config_from_state_payload({"packages": ["tmux", 42]})
+
+    def test_format_daily_rebuild_note_formats_local_time(self) -> None:
+        note = format_daily_rebuild_note(
+            "05 10 * * *",
+            now_utc=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+            local_tz=timezone(timedelta(hours=-4), name="EDT"),
+        )
+        self.assertEqual(
+            note,
+            "Scheduled rebuilds also run daily at about 6:05 AM EDT on this system (10:05 UTC).",
+        )
+
+    def test_format_daily_rebuild_note_formats_utc_when_local_timezone_is_utc(self) -> None:
+        note = format_daily_rebuild_note(
+            "05 10 * * *",
+            now_utc=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+            local_tz=timezone.utc,
+        )
+        self.assertEqual(note, "Scheduled rebuilds also run daily at about 10:05 AM UTC.")
 
     def test_load_repo_config_rejects_repo_without_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -562,7 +583,7 @@ class BuilderTests(unittest.TestCase):
                             with patch.object(app, "write_project_files", return_value=None):
                                 self.assertTrue(app.do_build())
 
-        self.assertIn("Scheduled rebuilds also run daily at about 10:05 UTC.", output.getvalue())
+        self.assertIn("Scheduled rebuilds also run daily at about", output.getvalue())
         self.assertIn("sudo rpm-ostree reset", output.getvalue())
 
     def test_do_build_omits_reset_hint_for_normal_build(self) -> None:
@@ -586,7 +607,7 @@ class BuilderTests(unittest.TestCase):
                             with patch.object(app, "write_project_files", return_value=None):
                                 self.assertTrue(app.do_build())
 
-        self.assertIn("Scheduled rebuilds also run daily at about 10:05 UTC.", output.getvalue())
+        self.assertIn("Scheduled rebuilds also run daily at about", output.getvalue())
         self.assertNotIn("sudo rpm-ostree reset", output.getvalue())
 
     def test_do_build_explains_manual_cleanup_when_delete_scope_is_missing(self) -> None:

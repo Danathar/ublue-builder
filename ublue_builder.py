@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+from datetime import datetime, timezone, tzinfo
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -174,6 +175,35 @@ def yaml_scalar(value: str) -> str:
 
 def ensure_trailing_newline(text: str) -> str:
     return text.rstrip("\n") + "\n"
+
+
+def format_daily_rebuild_note(
+    cron: str,
+    *,
+    now_utc: datetime | None = None,
+    local_tz: tzinfo | None = None,
+) -> str:
+    parts = cron.split()
+    if len(parts) != 5:
+        return "Scheduled rebuilds also run automatically on GitHub."
+    minute_text, hour_text, day_of_month, month, day_of_week = parts
+    if day_of_month != "*" or month != "*" or day_of_week != "*" or not minute_text.isdigit() or not hour_text.isdigit():
+        return f"Scheduled rebuilds also run automatically on GitHub using the configured schedule ({cron} UTC)."
+    hour = int(hour_text)
+    minute = int(minute_text)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return f"Scheduled rebuilds also run automatically on GitHub using the configured schedule ({cron} UTC)."
+
+    base_utc = now_utc.astimezone(timezone.utc) if now_utc else datetime.now(timezone.utc)
+    scheduled_utc = base_utc.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    tz = local_tz or datetime.now().astimezone().tzinfo or timezone.utc
+    scheduled_local = scheduled_utc.astimezone(tz)
+    local_time = scheduled_local.strftime("%I:%M %p").lstrip("0")
+    local_zone = scheduled_local.tzname() or "local time"
+    utc_time = scheduled_utc.strftime("%H:%M")
+    if local_zone == "UTC":
+        return f"Scheduled rebuilds also run daily at about {local_time} UTC."
+    return f"Scheduled rebuilds also run daily at about {local_time} {local_zone} on this system ({utc_time} UTC)."
 
 
 def command_exists(name: str) -> bool:
@@ -1621,6 +1651,9 @@ class App:
         scanned_removed = set(self.config.scanned_removed)
         return any(pkg in scanned_packages for pkg in self.config.packages) or any(pkg in scanned_removed for pkg in self.config.removed_packages)
 
+    def scheduled_rebuild_note(self) -> str:
+        return format_daily_rebuild_note(DEFAULT_GITHUB_BUILD_CRON)
+
     def repo_secret_exists(self, owner: str, repo: str, secret_name: str) -> bool:
         # We probe for the secret before trying to generate or upload a new key.
         # That keeps updates idempotent and avoids silently rotating keys.
@@ -1966,7 +1999,7 @@ class App:
             f"Image:      {image_uri}",
             "",
             "GitHub Actions is building your image now.",
-            "Scheduled rebuilds also run daily at about 10:05 UTC.",
+            self.scheduled_rebuild_note(),
             "After the first build finishes, switch with:",
             f"sudo bootc switch {image_uri}",
             f"Track the build: https://github.com/{owner}/{repo}/actions",

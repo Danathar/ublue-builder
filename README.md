@@ -33,6 +33,15 @@ That bundled snapshot may lag behind upstream, though the maintainer aims to kee
 - Updates repos that were previously created by this tool
 - Can scan a running rpm-ostree / bootc system and carry layered packages into a new image repo
 
+## What It Does Not Do
+
+- Does not modify your currently running system in place
+- Does not rebase your machine automatically
+- Does not remove layered packages from your current install
+- Does not adopt arbitrary existing repos that were not created by this tool
+
+It creates and manages a separate GitHub repository that builds your custom image through GitHub Actions.
+
 ## Why It Exists
 
 Universal Blue images are powerful, but the normal setup path assumes users are comfortable with image templates, GitHub Actions, signing, and image maintenance.
@@ -100,6 +109,21 @@ Run the beginner app:
 ./ublue_builder.py
 ```
 
+What to expect:
+
+- The tool creates a public GitHub repo under your account
+- GitHub Actions builds the image for you after repo creation
+- Scheduled rebuilds also run daily on GitHub
+- The scan option reads your current rpm-ostree / bootc state and can carry layered packages into the new repo
+
+If you use the scan flow to carry layered packages from your current system into the new image, run this before switching to the newly built image:
+
+```bash
+sudo rpm-ostree reset
+```
+
+That clears the old layered package state from the current deployment before you switch to the image-based version of those changes.
+
 ## Project Scope
 
 This repo intentionally keeps the beginner tool narrow:
@@ -108,6 +132,12 @@ This repo intentionally keeps the beginner tool narrow:
 - Existing repos that do not contain `.ublue-builder.json` are not supported for adoption or import
 - BlueBuild support was removed from the beginner app to keep the UX and code simpler
 - If a BlueBuild-focused workflow is needed later, it should live in a separate tool
+
+## Feedback
+
+If you test this and hit bugs, confusing behavior, or rough edges, please open an issue:
+
+https://github.com/Danathar/ublue-builder/issues
 
 ## License
 
