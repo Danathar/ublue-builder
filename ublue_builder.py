@@ -356,7 +356,7 @@ class Gum:
 
     def ensure_available(self) -> None:
         if not command_exists("gum"):
-            raise SystemExit("gum is required. Install it with: dnf5 install gum (or brew install gum)")
+            raise SystemExit("gum is required. Install it with: brew install gum")
 
     def style(self, *lines: str, **opts: str | int | bool) -> str:
         args = ["gum", "style"]
@@ -858,11 +858,11 @@ class App:
         print()
 
         if not command_exists("git"):
-            raise SystemExit("git is required. Install it with: dnf5 install git (or brew install git)")
+            raise SystemExit("git is required. Install it with: brew install git")
         self.gum.success("git found")
 
         if not command_exists("gh"):
-            raise SystemExit("GitHub CLI is required. Install it with: dnf5 install gh (or brew install gh)")
+            raise SystemExit("GitHub CLI is required. Install it with: brew install gh")
         if run(["gh", "auth", "status"], check=False).returncode != 0:
             raise SystemExit("GitHub CLI is not logged in. Run: gh auth login")
         try:
@@ -881,7 +881,7 @@ class App:
             self.gum.success("cosign found (new repos can configure signing automatically)")
         else:
             self.gum.warn("cosign not found (new repos and repos missing SIGNING_SECRET cannot configure signing yet)")
-            self.gum.hint("Install it with: dnf5 install cosign (or brew install cosign)")
+            self.gum.hint("Install it with: brew install cosign")
 
         if command_exists("dnf5"):
             self.gum.success("dnf5 found (manual package checks available)")
@@ -910,7 +910,7 @@ class App:
         if not command_exists("gh"):
             self.gum.error("GitHub CLI is required for this action.")
             print()
-            self.gum.hint("Install it with: dnf5 install gh (or brew install gh)")
+            self.gum.hint("Install it with: brew install gh")
             return False
         if run(["gh", "auth", "status"], check=False).returncode != 0:
             self.github_setup_guide()
@@ -1641,7 +1641,7 @@ class App:
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
             return True
         if not command_exists("cosign"):
-            raise CommandError("cosign is required for signed images. Install it with: dnf5 install cosign (or brew install cosign)")
+            raise CommandError("cosign is required for signed images. Install it with: brew install cosign")
         with tempfile.TemporaryDirectory(prefix="ublue-signing.") as tmp:
             tmpdir = Path(tmp)
             env = os.environ.copy()

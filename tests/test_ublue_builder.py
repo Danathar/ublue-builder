@@ -188,7 +188,7 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         with patch.object(app, "repo_secret_exists", return_value=False):
             with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
-                with self.assertRaisesRegex(CommandError, "dnf5 install cosign"):
+                with self.assertRaisesRegex(CommandError, "brew install cosign"):
                     app.ensure_signing_ready("example", "test-image")
 
     def test_preflight_warns_when_cosign_is_missing(self) -> None:
