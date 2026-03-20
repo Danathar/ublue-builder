@@ -1931,7 +1931,7 @@ class App:
                 run(["git", "init", "-b", branch], cwd=tmpdir)
                 run(["git", "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git"], cwd=tmpdir)
                 self.configure_temp_repo_git_identity(tmpdir)
-                self.write_project_files(tmpdir, include_workflow=True)
+                self.write_project_files(tmpdir, include_workflow=True, default_branch=branch)
                 run(["git", "add", "-A"], cwd=tmpdir)
                 run(["git", "commit", "-m", "Initial image configuration via ublue-builder"], cwd=tmpdir)
                 run(["git", "push", "origin", "HEAD"], cwd=tmpdir, capture=False)
@@ -2089,7 +2089,7 @@ class App:
                 f"This repo's saved settings file `{STATE_FILE}` is missing or broken. "
                 "Restore it from Git, or stop using this tool for this repo."
             ) from exc
-        except (json.JSONDecodeError, TypeError) as exc:
+        except (json.JSONDecodeError, TypeError, OSError) as exc:
             raise CommandError(
                 f"This repo's saved settings file `{STATE_FILE}` is missing or broken. "
                 "Restore it from Git, or stop using this tool for this repo."
@@ -2301,7 +2301,8 @@ class App:
         # and only then asks for confirmation before pushing.
         self.generated_cosign_pub = None
         self.config.signing_enabled = True
-        self.write_project_files(repo_dir, include_workflow=True)
+        default_branch = self.repo_default_branch(owner, repo)
+        self.write_project_files(repo_dir, include_workflow=True, default_branch=default_branch)
         diff = self.repo_diff_summary(repo_dir)
         if not diff:
             self.gum.warn("No changes detected.")
@@ -2316,7 +2317,7 @@ class App:
         if not self.gum.confirm(f"Push changes to {owner}/{repo}?", default=True):
             return
         self.config.signing_enabled = self.ensure_signing_ready(owner, repo)
-        self.write_project_files(repo_dir, include_workflow=True)
+        self.write_project_files(repo_dir, include_workflow=True, default_branch=default_branch)
         final_diff = self.repo_diff_summary(repo_dir)
         if not final_diff:
             self.gum.warn("No changes detected.")
@@ -2432,7 +2433,7 @@ class App:
         )
         return ensure_trailing_newline(updated)
 
-    def patch_container_workflow(self, existing_text: str) -> str:
+    def patch_container_workflow(self, existing_text: str, *, default_branch: str = "main") -> str:
         # This patcher updates the bundled template workflow in place. The main
         # goals are:
         # - pin actions to SHAs
@@ -2484,7 +2485,7 @@ class App:
                 output.append(f"{indent}if: {sign_if}")
                 continue
             output.append(line)
-        text = "\n".join(output)
+        text = self.patch_workflow_branch_filters("\n".join(output), default_branch)
         if not has_job_cosign:
             if re.search(r"^    env:\n", text, flags=re.MULTILINE):
                 text = re.sub(
@@ -2504,7 +2505,40 @@ class App:
                 )
         return ensure_trailing_newline(text)
 
-    def write_container_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+    def patch_workflow_branch_filters(self, workflow_text: str, default_branch: str) -> str:
+        lines = workflow_text.splitlines()
+        output: list[str] = []
+        current_event: str | None = None
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            if indent == 2 and stripped in {"pull_request:", "push:"}:
+                current_event = stripped[:-1]
+                output.append(line)
+                index += 1
+                continue
+            if current_event in {"pull_request", "push"} and indent == 4 and stripped == "branches:":
+                output.append(line)
+                output.append(f"{line[: len(line) - len(line.lstrip())]}  - {default_branch}")
+                index += 1
+                while index < len(lines):
+                    branch_line = lines[index]
+                    branch_stripped = branch_line.strip()
+                    branch_indent = len(branch_line) - len(branch_line.lstrip())
+                    if branch_indent == 6 and branch_stripped.startswith("- "):
+                        index += 1
+                        continue
+                    break
+                continue
+            if indent <= 2 and stripped.endswith(":"):
+                current_event = None
+            output.append(line)
+            index += 1
+        return ensure_trailing_newline("\n".join(output))
+
+    def write_container_project_files(self, base_dir: Path, *, include_workflow: bool, default_branch: str = "main") -> None:
         # This is the "materialize the repo" step for Containerfile mode. It
         # patches template-owned files where possible and generates tool-owned
         # files where needed.
@@ -2539,17 +2573,17 @@ class App:
         if include_workflow:
             workflow_path.parent.mkdir(parents=True, exist_ok=True)
             if workflow_path.exists():
-                workflow_path.write_text(self.patch_container_workflow(workflow_path.read_text()))
+                workflow_path.write_text(self.patch_container_workflow(workflow_path.read_text(), default_branch=default_branch))
             else:
-                workflow_path.write_text(self.generate_container_workflow())
+                workflow_path.write_text(self.generate_container_workflow(default_branch=default_branch))
 
-    def write_project_files(self, base_dir: Path, *, include_workflow: bool) -> None:
+    def write_project_files(self, base_dir: Path, *, include_workflow: bool, default_branch: str = "main") -> None:
         # Always write the canonical state file first. That way the repo can be
         # updated later even if a human edits generated files by hand.
         self.validate_config()
         base_dir.mkdir(parents=True, exist_ok=True)
         (base_dir / STATE_FILE).write_text(json.dumps(self.state_payload(), indent=2) + "\n")
-        self.write_container_project_files(base_dir, include_workflow=include_workflow)
+        self.write_container_project_files(base_dir, include_workflow=include_workflow, default_branch=default_branch)
 
     def generate_containerfile(self) -> str:
         # The Containerfile is intentionally small. Most customization lives in
@@ -2608,7 +2642,7 @@ class App:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
-    def generate_container_workflow(self) -> str:
+    def generate_container_workflow(self, *, default_branch: str = "main") -> str:
         # This is the GitHub Actions workflow for repos generated from scratch
         # instead of patched from an existing template copy.
         sign_if = "github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.COSIGN_PRIVATE_KEY != ''"
@@ -2618,12 +2652,12 @@ class App:
             "on:",
             "  pull_request:",
             "    branches:",
-            "      - main",
+            f"      - {default_branch}",
             "  schedule:",
             f"    - cron: '{DEFAULT_GITHUB_BUILD_CRON}'",
             "  push:",
             "    branches:",
-            "      - main",
+            f"      - {default_branch}",
             f"    paths-ignore: ['**/README.md', '{STATE_FILE}']",
             "  workflow_dispatch:",
             "",

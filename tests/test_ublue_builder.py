@@ -110,6 +110,15 @@ class BuilderTests(unittest.TestCase):
             with self.assertRaisesRegex(CommandError, "Only repos created by this tool are supported"):
                 self.make_app().load_repo_config(repo_dir)
 
+    def test_load_repo_config_wraps_state_file_read_errors(self) -> None:
+        app = self.make_app()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            (repo_dir / STATE_FILE).write_text("{}")
+            with patch("pathlib.Path.read_text", side_effect=OSError("permission denied")):
+                with self.assertRaisesRegex(CommandError, "saved settings file"):
+                    app.load_repo_config(repo_dir)
+
     def test_patch_container_workflow_pins_actions_and_ignores_state_file(self) -> None:
         app = self.make_app()
         app.config.signing_enabled = True
@@ -158,6 +167,29 @@ class BuilderTests(unittest.TestCase):
         )
         patched = app.patch_container_workflow(workflow)
         self.assertIn("paths-ignore: ['**/README.md', '.ublue-builder.json']", patched)
+
+    def test_patch_container_workflow_updates_branch_filters_for_default_branch(self) -> None:
+        app = self.make_app()
+        workflow = textwrap.dedent(
+            """\
+            name: Build container image
+            on:
+              pull_request:
+                branches:
+                  - main
+              push:
+                branches:
+                  - main
+            jobs:
+              build_push:
+                steps:
+                  - name: Checkout
+                    uses: actions/checkout@v4
+            """
+        )
+        patched = app.patch_container_workflow(workflow, default_branch="master")
+        self.assertIn("  pull_request:\n    branches:\n      - master", patched)
+        self.assertIn("  push:\n    branches:\n      - master", patched)
 
     def test_validate_config_rejects_unsafe_package_token(self) -> None:
         app = self.make_app()
@@ -553,9 +585,10 @@ class BuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
             with patch("ublue_builder.run", side_effect=fake_run):
-                with patch.object(app, "ensure_signing_ready", return_value=True):
-                    with patch.object(app, "write_project_files", return_value=None):
-                        app.push_update("example", "test-image", repo_dir)
+                with patch.object(app, "repo_default_branch", return_value="main"):
+                    with patch.object(app, "ensure_signing_ready", return_value=True):
+                        with patch.object(app, "write_project_files", return_value=None):
+                            app.push_update("example", "test-image", repo_dir)
 
         self.assertIn(["git", "config", "user.name", "example"], run_calls)
         self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
@@ -580,9 +613,10 @@ class BuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
             with patch("ublue_builder.run", side_effect=fake_run):
-                with patch.object(app, "ensure_signing_ready") as ensure_mock:
-                    with patch.object(app, "write_project_files", return_value=None):
-                        app.push_update("example", "test-image", repo_dir)
+                with patch.object(app, "repo_default_branch", return_value="main"):
+                    with patch.object(app, "ensure_signing_ready") as ensure_mock:
+                        with patch.object(app, "write_project_files", return_value=None):
+                            app.push_update("example", "test-image", repo_dir)
         ensure_mock.assert_not_called()
 
     def test_push_update_reconfirms_when_signing_changes_the_final_diff(self) -> None:
@@ -619,9 +653,10 @@ class BuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
             with patch("ublue_builder.run", side_effect=fake_run):
-                with patch.object(app, "ensure_signing_ready", return_value=True):
-                    with patch.object(app, "write_project_files", return_value=None):
-                        app.push_update("example", "test-image", repo_dir)
+                with patch.object(app, "repo_default_branch", return_value="main"):
+                    with patch.object(app, "ensure_signing_ready", return_value=True):
+                        with patch.object(app, "write_project_files", return_value=None):
+                            app.push_update("example", "test-image", repo_dir)
 
         self.assertTrue(any("final update changed" in message for level, message in app.gum.messages if level == "warn"))
         self.assertIn("Push final changes to example/test-image?", confirm_prompts)
@@ -646,9 +681,10 @@ class BuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
             with patch("ublue_builder.run", side_effect=fake_run):
-                with patch.object(app, "ensure_signing_ready", return_value=True):
-                    with patch.object(app, "write_project_files", return_value=None):
-                        app.push_update("example", "test-image", repo_dir)
+                with patch.object(app, "repo_default_branch", return_value="main"):
+                    with patch.object(app, "ensure_signing_ready", return_value=True):
+                        with patch.object(app, "write_project_files", return_value=None):
+                            app.push_update("example", "test-image", repo_dir)
 
         self.assertIn(("warn", MANAGED_REPO_WARNING), app.gum.messages)
 
@@ -744,9 +780,10 @@ class BuilderTests(unittest.TestCase):
         with patch.object(app, "select_repo", return_value=("example", "test-image")):
             with patch.object(app, "clone_repo", return_value=None):
                 with patch.object(app, "load_repo_config", return_value=None):
-                    with patch.object(app, "update_menu", return_value=False):
-                        with patch.object(app, "ensure_signing_ready") as ensure_mock:
-                            app.update_existing_image()
+                    with patch.object(app, "repo_default_branch", return_value="main"):
+                        with patch.object(app, "update_menu", return_value=False):
+                            with patch.object(app, "ensure_signing_ready") as ensure_mock:
+                                app.update_existing_image()
         ensure_mock.assert_not_called()
 
     def test_load_repo_config_keeps_authenticated_session_user(self) -> None:
@@ -808,12 +845,22 @@ class BuilderTests(unittest.TestCase):
             app.write_project_files(repo_dir, include_workflow=False)
             self.assertEqual((repo_dir / "cosign.pub").read_text(), "PUBLIC KEY DATA\n")
 
-    def test_generate_container_workflow_limits_events_to_main_and_pins_cosign_release(self) -> None:
+    def test_write_project_files_updates_template_workflow_branch_filters(self) -> None:
+        app = self.make_app()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_dir = Path(tmp)
+            app.clone_container_template(repo_dir)
+            app.write_project_files(repo_dir, include_workflow=True, default_branch="master")
+            workflow = (repo_dir / ".github/workflows/build.yml").read_text()
+        self.assertIn("  pull_request:\n    branches:\n      - master", workflow)
+        self.assertIn("  push:\n    branches:\n      - master", workflow)
+
+    def test_generate_container_workflow_uses_default_branch_and_pins_cosign_release(self) -> None:
         app = self.make_app()
         app.config.signing_enabled = True
-        workflow = app.generate_container_workflow()
-        self.assertIn("  pull_request:\n    branches:\n      - main", workflow)
-        self.assertIn("  push:\n    branches:\n      - main", workflow)
+        workflow = app.generate_container_workflow(default_branch="master")
+        self.assertIn("  pull_request:\n    branches:\n      - master", workflow)
+        self.assertIn("  push:\n    branches:\n      - master", workflow)
         self.assertIn("          cosign-release: 'v2.6.1'", workflow)
 
     def test_select_repo_manual_entry_recovers_after_missing_repo(self) -> None:
