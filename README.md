@@ -71,8 +71,11 @@ You need:
 - `gh`
 - `cosign`
 - `dnf5` for manual package-name checks
+- `rpm-ostree`
 
-On an existing Universal Blue system, all or nearly all of these should probably already be present. If something is missing, you can usually solve it by switching to a developer image such as Bazzite DX, Aurora DX, or Bluefin DX, and/or by installing the missing CLI tools with Homebrew.
+The app checks for all of these at startup and exits if any are missing.
+
+On supported Universal Blue desktop images, core host tools like `dnf5` and `rpm-ostree` should already be present. If helper CLI tools such as `gum`, `git`, `gh`, or `cosign` are missing, install them with Homebrew.
 
 You also need a GitHub account and should log in first:
 
@@ -83,7 +86,7 @@ gh auth login
 On Universal Blue systems, missing CLI tools are typically installed with Homebrew:
 
 ```bash
-brew install gum gh cosign
+brew install gum git gh cosign
 ```
 
 ## Installation

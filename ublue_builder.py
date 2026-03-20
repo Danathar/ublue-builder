@@ -71,6 +71,8 @@ ACTION_PINS: dict[str, tuple[str, str]] = {
     "redhat-actions/push-to-registry": ("5ed88d269cf581ea9ef6dd6806d01562096bee9c", "v2"),
     "sigstore/cosign-installer": ("faadad0cce49287aee09b3a48701e75088a2c6ad", "v4.0.0"),
 }
+PRECHECK_REQUIRED_TOOLS: tuple[str, ...] = ("gum", "git", "gh", "cosign", "dnf5", "rpm-ostree")
+BREW_INSTALLABLE_TOOLS: tuple[str, ...] = ("gum", "git", "gh", "cosign")
 
 
 @dataclass(frozen=True)
@@ -833,6 +835,63 @@ class App:
     def requested_packages_note(self) -> str:
         return "Selected packages are what this repo will attempt to add, even if some are already present in the chosen base image."
 
+    def render_preflight_failure(
+        self,
+        *,
+        missing_tools: Sequence[str],
+        github_login_missing: bool = False,
+        github_account_error: bool = False,
+    ) -> None:
+        brew_tools = [name for name in PRECHECK_REQUIRED_TOOLS if name in missing_tools and name in BREW_INSTALLABLE_TOOLS]
+        host_tools = [name for name in PRECHECK_REQUIRED_TOOLS if name in missing_tools and name not in BREW_INSTALLABLE_TOOLS]
+
+        if command_exists("gum"):
+            self.gum.ensure_available()
+            self.gum.header("Preflight Failed", clear_screen=False)
+            self.gum.warn("This tool requires all startup checks to pass before it can continue.")
+            print()
+            if missing_tools:
+                self.menu_section("Missing Tools", ", ".join(missing_tools))
+                print()
+            if brew_tools:
+                self.menu_section("Install With Homebrew", f"brew install {' '.join(brew_tools)}")
+                print()
+            if github_login_missing:
+                self.menu_section("GitHub Login", "Run: gh auth login")
+                print()
+            if github_account_error:
+                self.menu_section("GitHub Account Check", "Run: gh auth status && gh auth login")
+                print()
+            if host_tools:
+                self.menu_section(
+                    "Host Requirements",
+                    "This tool expects a supported rpm-ostree / bootc desktop image with dnf5 and rpm-ostree available.",
+                )
+                print()
+            self.gum.enter_to_continue("Press Enter to exit to the terminal...")
+            return
+
+        print()
+        print("Preflight Failed")
+        print()
+        print("This tool requires all startup checks to pass before it can continue.")
+        if missing_tools:
+            print()
+            print(f"Missing tools: {', '.join(missing_tools)}")
+        if brew_tools:
+            print()
+            print(f"Install with Homebrew: brew install {' '.join(brew_tools)}")
+        if github_login_missing:
+            print()
+            print("Run: gh auth login")
+        if github_account_error:
+            print()
+            print("Run: gh auth status && gh auth login")
+        if host_tools:
+            print()
+            print("This tool expects a supported rpm-ostree / bootc desktop image with dnf5 and rpm-ostree available.")
+        print()
+
     def menu_section(self, title: str, *lines: str) -> None:
         label = title if title.endswith((":", "?", "!")) else f"{title}:"
         self.gum.instruction(label)
@@ -882,46 +941,42 @@ class App:
     def preflight(self) -> None:
         # Preflight is intentionally blunt: it checks the tools this app depends
         # on before we let the user invest time in the wizard.
+        missing_tools = [name for name in PRECHECK_REQUIRED_TOOLS if not command_exists(name)]
+        github_login_missing = False
+        github_account_error = False
+
+        if "gh" not in missing_tools:
+            if run(["gh", "auth", "status"], check=False).returncode != 0:
+                github_login_missing = True
+            else:
+                try:
+                    self.github_user = str(self.gh_json(["api", "user"])["login"])
+                    self.github_available = True
+                    self.config.github_user = self.github_user
+                except Exception:
+                    self.github_available = False
+                    github_account_error = True
+        else:
+            self.github_available = False
+
+        if missing_tools or github_login_missing or github_account_error:
+            self.render_preflight_failure(
+                missing_tools=missing_tools,
+                github_login_missing=github_login_missing,
+                github_account_error=github_account_error,
+            )
+            raise SystemExit(1)
+
         self.gum.ensure_available()
         self.gum.header("Preflight Checks", clear_screen=False)
         self.gum.hint("Checking required tools and the runtime environment...")
         print()
 
-        if not command_exists("git"):
-            raise SystemExit("git is required. Install it with: brew install git")
         self.gum.success("git found")
-
-        if not command_exists("gh"):
-            raise SystemExit("GitHub CLI is required. Install it with: brew install gh")
-        if run(["gh", "auth", "status"], check=False).returncode != 0:
-            raise SystemExit("GitHub CLI is not logged in. Run: gh auth login")
-        try:
-            self.github_user = str(self.gh_json(["api", "user"])["login"])
-            self.github_available = True
-            self.config.github_user = self.github_user
-            self.gum.success(f"GitHub CLI authenticated as: {self.github_user}")
-        except Exception as exc:
-            self.github_available = False
-            raise SystemExit(
-                "GitHub CLI login was detected, but the account could not be read. "
-                "Try: gh auth status && gh auth login"
-            ) from exc
-
-        if command_exists("cosign"):
-            self.gum.success("cosign found (new repos can configure signing automatically)")
-        else:
-            self.gum.warn("cosign not found (new repos and repos missing SIGNING_SECRET cannot configure signing yet)")
-            self.gum.hint("Install it with: brew install cosign")
-
-        if command_exists("dnf5"):
-            self.gum.success("dnf5 found (manual package checks available)")
-        else:
-            self.gum.warn("dnf5 not found (manual package names will be checked during the GitHub build)")
-
-        if command_exists("rpm-ostree"):
-            self.gum.success("rpm-ostree found (OS scan available)")
-        else:
-            self.gum.warn("rpm-ostree not found (OS scan unavailable)")
+        self.gum.success(f"GitHub CLI authenticated as: {self.github_user}")
+        self.gum.success("cosign found (new repos can configure signing automatically)")
+        self.gum.success("dnf5 found (manual package checks available)")
+        self.gum.success("rpm-ostree found (OS scan available)")
 
         print()
         self.gum.enter_to_continue("Press Enter to continue...")

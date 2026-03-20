@@ -246,7 +246,7 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaisesRegex(CommandError, "brew install cosign"):
                     app.ensure_signing_ready("example", "test-image")
 
-    def test_preflight_warns_when_cosign_is_missing(self) -> None:
+    def test_preflight_requires_cosign(self) -> None:
         app = self.make_app()
         stub = GumStub()
         stub.ensure_available = lambda: None
@@ -261,8 +261,11 @@ class BuilderTests(unittest.TestCase):
             with patch("ublue_builder.run") as run_mock:
                 run_mock.return_value = subprocess.CompletedProcess(["gh", "auth", "status"], 0, "", "")
                 with patch.object(app, "gh_json", return_value={"login": "example"}):
-                    app.preflight()
-        self.assertTrue(any("cosign not found" in message for level, message in app.gum.messages if level == "warn"))
+                    with self.assertRaises(SystemExit):
+                        app.preflight()
+        self.assertTrue(any("startup checks" in message for level, message in app.gum.messages if level == "warn"))
+        self.assertTrue(any("brew install cosign" in message for level, message in app.gum.messages if level == "hint"))
+        self.assertEqual(stub.prompts, ["Press Enter to exit to the terminal..."])
 
     def test_preflight_requires_github_cli(self) -> None:
         app = self.make_app()
@@ -271,11 +274,14 @@ class BuilderTests(unittest.TestCase):
         app.gum = stub
 
         def fake_exists(name: str) -> bool:
-            return name == "git"
+            return name in {"gum", "git", "cosign", "dnf5", "rpm-ostree"}
 
         with patch("ublue_builder.command_exists", side_effect=fake_exists):
-            with self.assertRaisesRegex(SystemExit, "GitHub CLI is required"):
+            with self.assertRaises(SystemExit):
                 app.preflight()
+        self.assertTrue(any("gh" in message for level, message in app.gum.messages if level == "hint"))
+        self.assertTrue(any("brew install gh" in message for level, message in app.gum.messages if level == "hint"))
+        self.assertEqual(stub.prompts, ["Press Enter to exit to the terminal..."])
 
     def test_preflight_requires_github_login(self) -> None:
         app = self.make_app()
@@ -284,12 +290,14 @@ class BuilderTests(unittest.TestCase):
         app.gum = stub
 
         def fake_exists(name: str) -> bool:
-            return name in {"git", "gh"}
+            return name in {"gum", "git", "gh", "cosign", "dnf5", "rpm-ostree"}
 
         with patch("ublue_builder.command_exists", side_effect=fake_exists):
             with patch("ublue_builder.run", return_value=subprocess.CompletedProcess(["gh", "auth", "status"], 1, "", "")):
-                with self.assertRaisesRegex(SystemExit, "gh auth login"):
+                with self.assertRaises(SystemExit):
                     app.preflight()
+        self.assertTrue(any("gh auth login" in message for level, message in app.gum.messages if level == "hint"))
+        self.assertEqual(stub.prompts, ["Press Enter to exit to the terminal..."])
 
     def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
         app = self.make_app()
