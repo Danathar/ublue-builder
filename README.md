@@ -77,6 +77,21 @@ On Universal Blue systems, missing CLI tools are typically installed with Homebr
 brew install gum gh cosign
 ```
 
+## Installation
+
+Clone this repo locally and enter the project directory:
+
+```bash
+git clone https://github.com/Danathar/ublue-builder.git
+cd ublue-builder
+```
+
+If the script is not already executable on your system, make it executable once:
+
+```bash
+chmod +x ublue_builder.py
+```
+
 ## Usage
 
 Run the beginner app:
