@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from ublue_builder import (
+from atomic_image_builder import (
     ACTION_PINS,
     App,
     BASE_IMAGES,
@@ -17,11 +17,14 @@ from ublue_builder import (
     CommandError,
     CONTAINERFILE_TEMPLATE_DIR,
     Config,
+    FEDORA_ATOMIC_DEFAULT_TAG,
     Gum,
     MANAGED_REPO_WARNING,
     PACKAGE_SEARCH_LIMIT,
     ScreenBack,
     STATE_FILE,
+    TOOL_NAME,
+    TOOL_SLUG,
     VERSION,
     config_from_state_payload,
     format_daily_rebuild_note,
@@ -90,7 +93,7 @@ class BuilderTests(unittest.TestCase):
         app.config = Config(
             method="containerfile",
             base_image_uri="ghcr.io/ublue-os/bazzite:stable",
-            base_image_name="Bazzite",
+            base_image_name="Bazzite (KDE)",
             repo_name="test-image",
             image_desc="Test image",
             github_user="example",
@@ -220,11 +223,30 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "Invalid package value"):
             app.validate_config()
 
-    def test_base_image_picker_is_limited_to_beginner_images(self) -> None:
+    def test_base_image_picker_includes_supported_universal_blue_and_fedora_atomic_images(self) -> None:
         self.assertEqual(
             [image.key for image in BASE_IMAGES],
-            ["bazzite", "bazzite-gnome", "bazzite-dx", "bazzite-dx-gnome", "aurora", "aurora-dx", "bluefin", "bluefin-dx"],
+            [
+                "bazzite",
+                "bazzite-gnome",
+                "bazzite-dx",
+                "bazzite-dx-gnome",
+                "aurora",
+                "aurora-dx",
+                "bluefin",
+                "bluefin-dx",
+                "silverblue",
+                "kinoite",
+                "sway-atomic",
+                "budgie-atomic",
+                "cosmic-atomic",
+            ],
         )
+
+    def test_fedora_atomic_images_use_the_curated_stable_tag(self) -> None:
+        image_map = {image.key: image.image_uri for image in BASE_IMAGES}
+        self.assertEqual(image_map["silverblue"], f"quay.io/fedora-ostree-desktops/silverblue:{FEDORA_ATOMIC_DEFAULT_TAG}")
+        self.assertEqual(image_map["kinoite"], f"quay.io/fedora-ostree-desktops/kinoite:{FEDORA_ATOMIC_DEFAULT_TAG}")
 
     def test_validate_config_rejects_unsupported_base_image(self) -> None:
         app = self.make_app()
@@ -239,10 +261,16 @@ class BuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(CommandError, "Repository name is invalid"):
             app.validate_config()
 
+    def test_match_base_image_accepts_fedora_atomic_refs_with_other_tags(self) -> None:
+        app = self.make_app()
+        matched = app.match_base_image("quay.io/fedora-ostree-desktops/kinoite:44")
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.name, "Fedora Kinoite")
+
     def test_ensure_signing_ready_requires_cosign(self) -> None:
         app = self.make_app()
         with patch.object(app, "repo_secret_exists", return_value=False):
-            with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
+            with patch("atomic_image_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
                 with self.assertRaisesRegex(CommandError, "brew install cosign"):
                     app.ensure_signing_ready("example", "test-image")
 
@@ -257,8 +285,8 @@ class BuilderTests(unittest.TestCase):
                 return False
             return True
 
-        with patch("ublue_builder.command_exists", side_effect=fake_exists):
-            with patch("ublue_builder.run") as run_mock:
+        with patch("atomic_image_builder.command_exists", side_effect=fake_exists):
+            with patch("atomic_image_builder.run") as run_mock:
                 run_mock.return_value = subprocess.CompletedProcess(["gh", "auth", "status"], 0, "", "")
                 with patch.object(app, "gh_json", return_value={"login": "example"}):
                     with self.assertRaises(SystemExit):
@@ -276,7 +304,7 @@ class BuilderTests(unittest.TestCase):
         def fake_exists(name: str) -> bool:
             return name in {"gum", "git", "cosign", "dnf5", "rpm-ostree"}
 
-        with patch("ublue_builder.command_exists", side_effect=fake_exists):
+        with patch("atomic_image_builder.command_exists", side_effect=fake_exists):
             with self.assertRaises(SystemExit):
                 app.preflight()
         self.assertTrue(any("gh" in message for level, message in app.gum.messages if level == "hint"))
@@ -292,8 +320,8 @@ class BuilderTests(unittest.TestCase):
         def fake_exists(name: str) -> bool:
             return name in {"gum", "git", "gh", "cosign", "dnf5", "rpm-ostree"}
 
-        with patch("ublue_builder.command_exists", side_effect=fake_exists):
-            with patch("ublue_builder.run", return_value=subprocess.CompletedProcess(["gh", "auth", "status"], 1, "", "")):
+        with patch("atomic_image_builder.command_exists", side_effect=fake_exists):
+            with patch("atomic_image_builder.run", return_value=subprocess.CompletedProcess(["gh", "auth", "status"], 1, "", "")):
                 with self.assertRaises(SystemExit):
                     app.preflight()
         self.assertTrue(any("gh auth login" in message for level, message in app.gum.messages if level == "hint"))
@@ -367,7 +395,7 @@ class BuilderTests(unittest.TestCase):
 
         stub.spinner_result = fake_spinner_result
         app.gum = stub
-        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: name == "dnf5"):
             results, truncated, message = app.search_host_packages("pkg")
 
         self.assertIsNone(message)
@@ -386,7 +414,7 @@ class BuilderTests(unittest.TestCase):
             'Cache-only enabled but no cache for repository "fedora"',
         )
         app.gum = stub
-        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: name == "dnf5"):
             results, truncated, message = app.search_host_packages("tmux")
 
         self.assertEqual(results, [])
@@ -480,7 +508,7 @@ class BuilderTests(unittest.TestCase):
         app.github_user = "example"
         app.config.github_user = "example"
         app.config.packages = ["bad;rm"]
-        with patch("ublue_builder.run") as run_mock:
+        with patch("atomic_image_builder.run") as run_mock:
             with self.assertRaisesRegex(CommandError, "Invalid package value"):
                 app.do_build()
         run_mock.assert_not_called()
@@ -491,8 +519,8 @@ class BuilderTests(unittest.TestCase):
         app.github_user = "example"
         app.config.github_user = "example"
 
-        with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
-            with patch("ublue_builder.run") as run_mock:
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
+            with patch("atomic_image_builder.run") as run_mock:
                 run_mock.return_value = subprocess.CompletedProcess(["gh", "repo", "view"], 1, "", "")
                 with self.assertRaisesRegex(CommandError, "SIGNING_SECRET"):
                     app.do_build()
@@ -515,7 +543,7 @@ class BuilderTests(unittest.TestCase):
                 return subprocess.CompletedProcess(list(args), 0, "", "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with patch("ublue_builder.run", side_effect=fake_run):
+        with patch("atomic_image_builder.run", side_effect=fake_run):
             with patch.object(app, "ensure_signing_ready", side_effect=CommandError("signing failed")):
                 with self.assertRaisesRegex(CommandError, "signing failed"):
                     app.do_build()
@@ -536,7 +564,7 @@ class BuilderTests(unittest.TestCase):
                 return subprocess.CompletedProcess(list(args), 1, "", "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with patch("ublue_builder.run", side_effect=fake_run):
+        with patch("atomic_image_builder.run", side_effect=fake_run):
             with patch.object(app, "ensure_signing_ready", return_value=True):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "seed_project_template", return_value=None):
@@ -545,7 +573,7 @@ class BuilderTests(unittest.TestCase):
 
         self.assertIn(["git", "config", "user.name", "example"], run_calls)
         self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
-        self.assertIn(["git", "commit", "-m", "Initial image configuration via ublue-builder"], run_calls)
+        self.assertIn(["git", "commit", "-m", f"Initial image configuration via {TOOL_SLUG}"], run_calls)
 
     def test_do_build_warns_about_hand_edited_managed_repos(self) -> None:
         app = self.make_app()
@@ -559,7 +587,7 @@ class BuilderTests(unittest.TestCase):
                 return subprocess.CompletedProcess(list(args), 1, "", "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with patch("ublue_builder.run", side_effect=fake_run):
+        with patch("atomic_image_builder.run", side_effect=fake_run):
             with patch.object(app, "ensure_signing_ready", return_value=True):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "seed_project_template", return_value=None):
@@ -584,7 +612,7 @@ class BuilderTests(unittest.TestCase):
 
         output = io.StringIO()
         with redirect_stdout(output):
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "ensure_signing_ready", return_value=True):
                     with patch.object(app, "repo_default_branch", return_value="main"):
                         with patch.object(app, "seed_project_template", return_value=None):
@@ -608,7 +636,7 @@ class BuilderTests(unittest.TestCase):
 
         output = io.StringIO()
         with redirect_stdout(output):
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "ensure_signing_ready", return_value=True):
                     with patch.object(app, "repo_default_branch", return_value="main"):
                         with patch.object(app, "seed_project_template", return_value=None):
@@ -637,7 +665,7 @@ class BuilderTests(unittest.TestCase):
                 )
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with patch("ublue_builder.run", side_effect=fake_run):
+        with patch("atomic_image_builder.run", side_effect=fake_run):
             with patch.object(app, "ensure_signing_ready", side_effect=CommandError("signing failed")):
                 with self.assertRaisesRegex(CommandError, "signing failed"):
                     app.do_build()
@@ -665,7 +693,7 @@ class BuilderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "ensure_signing_ready", return_value=True):
                         with patch.object(app, "write_project_files", return_value=None):
@@ -673,7 +701,7 @@ class BuilderTests(unittest.TestCase):
 
         self.assertIn(["git", "config", "user.name", "example"], run_calls)
         self.assertIn(["git", "config", "user.email", "example@users.noreply.github.com"], run_calls)
-        self.assertIn(["git", "commit", "-m", f"Update image configuration via ublue-builder v{VERSION}"], run_calls)
+        self.assertIn(["git", "commit", "-m", f"Update image configuration via {TOOL_SLUG} v{VERSION}"], run_calls)
 
     def test_push_update_does_not_configure_signing_until_push_is_confirmed(self) -> None:
         app = self.make_app()
@@ -693,7 +721,7 @@ class BuilderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "ensure_signing_ready") as ensure_mock:
                         with patch.object(app, "write_project_files", return_value=None):
@@ -733,7 +761,7 @@ class BuilderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "ensure_signing_ready", return_value=True):
                         with patch.object(app, "write_project_files", return_value=None):
@@ -761,7 +789,7 @@ class BuilderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo_dir = Path(tmp)
-            with patch("ublue_builder.run", side_effect=fake_run):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
                 with patch.object(app, "repo_default_branch", return_value="main"):
                     with patch.object(app, "ensure_signing_ready", return_value=True):
                         with patch.object(app, "write_project_files", return_value=None):
@@ -811,9 +839,9 @@ class BuilderTests(unittest.TestCase):
             }
         )
         app.gum = GumStub()
-        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
             with patch(
-                "ublue_builder.run",
+                "atomic_image_builder.run",
                 return_value=subprocess.CompletedProcess(["rpm-ostree", "status", "--json", "--booted"], 0, status_payload, ""),
             ):
                 result = app.scan_os()
@@ -841,9 +869,9 @@ class BuilderTests(unittest.TestCase):
             }
         )
         app.gum = GumStub()
-        with patch("ublue_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
             with patch(
-                "ublue_builder.run",
+                "atomic_image_builder.run",
                 return_value=subprocess.CompletedProcess(["rpm-ostree", "status", "--json", "--booted"], 0, status_payload, ""),
             ):
                 result = app.scan_os()
@@ -986,7 +1014,7 @@ class BuilderTests(unittest.TestCase):
 
     def test_update_menu_restores_base_image_when_cancelled(self) -> None:
         app = self.make_app()
-        base_choice = app.format_task_choice("Base image", "Bazzite")
+        base_choice = app.format_task_choice("Base image", "Bazzite (KDE)")
         choices = [base_choice, "Cancel and go back"]
         stub = GumStub()
         stub.choose = lambda _options, **_kwargs: [choices.pop(0)]
@@ -996,7 +1024,7 @@ class BuilderTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(app.config.base_image_uri, "ghcr.io/ublue-os/bazzite:stable")
-        self.assertEqual(app.config.base_image_name, "Bazzite")
+        self.assertEqual(app.config.base_image_name, "Bazzite (KDE)")
 
     def test_bundled_template_snapshots_exist(self) -> None:
         self.assertTrue((CONTAINERFILE_TEMPLATE_DIR / "Containerfile").is_file())
@@ -1014,7 +1042,7 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "seeded"
-            with patch("ublue_builder.shutil.copytree", side_effect=OSError("disk full")):
+            with patch("atomic_image_builder.shutil.copytree", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(CommandError, "Unable to copy bundled template snapshot"):
                     app.clone_container_template(target)
 
@@ -1035,7 +1063,7 @@ class BuilderTests(unittest.TestCase):
     def test_gum_confirm_raises_keyboard_interrupt_on_ctrl_c(self) -> None:
         gum = Gum()
         completed = subprocess.CompletedProcess(["gum", "confirm"], 130, "", "")
-        with patch("ublue_builder.run", return_value=completed):
+        with patch("atomic_image_builder.run", return_value=completed):
             with self.assertRaises(KeyboardInterrupt):
                 gum.confirm("Continue?")
 
@@ -1120,9 +1148,9 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("requested by this repo's generated build script", readme)
         self.assertIn(app.requested_packages_note(), readme)
         self.assertNotIn("## Installed Packages", readme)
-        self.assertIn("## Managed By ublue-builder", readme)
+        self.assertIn(f"## Managed By {TOOL_NAME}", readme)
         self.assertIn(f"`{STATE_FILE}`", readme)
-        self.assertIn("stop using `ublue-builder` for this repo", readme)
+        self.assertIn(f"stop using `{TOOL_SLUG}` for this repo", readme)
         self.assertNotIn("## Local Build", readme)
         self.assertNotIn("just build", readme)
 
