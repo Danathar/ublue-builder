@@ -51,6 +51,13 @@ PACKAGE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._+:-]+$")
 COPR_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 SERVICE_TOKEN_RE = re.compile(r"^[A-Za-z0-9@._:+-]+$")
 FROM_LINE_RE = re.compile(r"^(\s*FROM(?:\s+--platform=\S+)?\s+)(\S+)(.*)$", flags=re.IGNORECASE)
+DNF5_MISSING_MARKERS = (
+    "no matches found",
+    "no package matched",
+    "no packages to list",
+    "matched no packages",
+    "no matching packages",
+)
 # GitHub Actions should be pinned to immutable SHAs instead of floating tags.
 # The human-readable tag is kept as a comment so maintainers can still tell what
 # upstream version the pin came from.
@@ -349,7 +356,7 @@ class Gum:
 
     def ensure_available(self) -> None:
         if not command_exists("gum"):
-            raise SystemExit("gum is required. Install it with: brew install gum")
+            raise SystemExit("gum is required. Install it with: dnf5 install gum (or brew install gum)")
 
     def style(self, *lines: str, **opts: str | int | bool) -> str:
         args = ["gum", "style"]
@@ -851,11 +858,11 @@ class App:
         print()
 
         if not command_exists("git"):
-            raise SystemExit("git is required. Install it with: brew install git")
+            raise SystemExit("git is required. Install it with: dnf5 install git (or brew install git)")
         self.gum.success("git found")
 
         if not command_exists("gh"):
-            raise SystemExit("GitHub CLI is required. Install it with: brew install gh")
+            raise SystemExit("GitHub CLI is required. Install it with: dnf5 install gh (or brew install gh)")
         if run(["gh", "auth", "status"], check=False).returncode != 0:
             raise SystemExit("GitHub CLI is not logged in. Run: gh auth login")
         try:
@@ -874,7 +881,7 @@ class App:
             self.gum.success("cosign found (new repos can configure signing automatically)")
         else:
             self.gum.warn("cosign not found (new repos and repos missing SIGNING_SECRET cannot configure signing yet)")
-            self.gum.hint("Install it with: brew install cosign")
+            self.gum.hint("Install it with: dnf5 install cosign (or brew install cosign)")
 
         if command_exists("dnf5"):
             self.gum.success("dnf5 found (manual package checks available)")
@@ -903,7 +910,7 @@ class App:
         if not command_exists("gh"):
             self.gum.error("GitHub CLI is required for this action.")
             print()
-            self.gum.hint("Install it with: brew install gh")
+            self.gum.hint("Install it with: dnf5 install gh (or brew install gh)")
             return False
         if run(["gh", "auth", "status"], check=False).returncode != 0:
             self.github_setup_guide()
@@ -1472,30 +1479,31 @@ class App:
         self.gum.pager(self.read_only_pager_text("Review Build Configuration", lines))
 
     def review_new_image(self, *, step: int, total_steps: int) -> str:
-        self.show_step_header("Review and Create Image", step=step, total_steps=total_steps)
-        self.gum.hint("Choose a section to review or change, or start the GitHub build.")
-        print()
-        software_label = self.format_task_choice("Software", self.software_status())
-        repo_label = self.format_task_choice("Repository settings", self.repository_status())
-        base_label = self.format_task_choice("Base image", self.config.base_image_name or "(not set)")
-        full_label = "View full configuration"
-        build_label = "Start GitHub build"
-        cancel_label = "Cancel and return to the main menu"
-        options = [software_label, repo_label, base_label, full_label, build_label, cancel_label]
-        choice = self.gum.choose(options, height=9)
-        selected = choice[0] if choice else cancel_label
-        if selected == build_label:
-            return "build"
-        if selected == software_label:
-            return "software"
-        if selected == repo_label:
-            return "repo"
-        if selected == base_label:
-            return "base"
-        if selected == full_label:
-            self.show_summary(step=step, total_steps=total_steps, next_hint="This is the full build summary.")
-            return self.review_new_image(step=step, total_steps=total_steps)
-        return "cancel"
+        while True:
+            self.show_step_header("Review and Create Image", step=step, total_steps=total_steps)
+            self.gum.hint("Choose a section to review or change, or start the GitHub build.")
+            print()
+            software_label = self.format_task_choice("Software", self.software_status())
+            repo_label = self.format_task_choice("Repository settings", self.repository_status())
+            base_label = self.format_task_choice("Base image", self.config.base_image_name or "(not set)")
+            full_label = "View full configuration"
+            build_label = "Start GitHub build"
+            cancel_label = "Cancel and return to the main menu"
+            options = [software_label, repo_label, base_label, full_label, build_label, cancel_label]
+            choice = self.gum.choose(options, height=9)
+            selected = choice[0] if choice else cancel_label
+            if selected == build_label:
+                return "build"
+            if selected == software_label:
+                return "software"
+            if selected == repo_label:
+                return "repo"
+            if selected == base_label:
+                return "base"
+            if selected == full_label:
+                self.show_summary(step=step, total_steps=total_steps, next_hint="This is the full build summary.")
+                continue
+            return "cancel"
 
     def scan_os(self) -> bool:
         # This is the one place where the beginner tool looks at the running
@@ -1633,7 +1641,7 @@ class App:
         if self.repo_secret_exists(owner, repo, "SIGNING_SECRET"):
             return True
         if not command_exists("cosign"):
-            raise CommandError("cosign is required for signed images. Install it with: brew install cosign")
+            raise CommandError("cosign is required for signed images. Install it with: dnf5 install cosign (or brew install cosign)")
         with tempfile.TemporaryDirectory(prefix="ublue-signing.") as tmp:
             tmpdir = Path(tmp)
             env = os.environ.copy()
@@ -1686,10 +1694,7 @@ class App:
             if any(target.iterdir()):
                 raise CommandError(f"{target} already exists and is not empty.")
             target.rmdir()
-        self.gum.spinner(
-            f"Copying bundled {repo} template...",
-            ["python3", "-c", "import shutil, sys; shutil.copytree(sys.argv[1], sys.argv[2], ignore=shutil.ignore_patterns('.template-source'))", str(source_dir), str(target)],
-        )
+        shutil.copytree(source_dir, target, ignore=shutil.ignore_patterns(".template-source"))
 
     def clone_container_template(self, target: Path) -> None:
         self.copy_template_snapshot(target, repo=CONTAINERFILE_TEMPLATE_REPO, source_dir=CONTAINERFILE_TEMPLATE_DIR)
@@ -1810,14 +1815,7 @@ class App:
             self.package_lookup_cache[package] = True
             return True
         detail = "\n".join(part for part in [proc.stdout, proc.stderr] if part).lower()
-        missing_markers = (
-            "no matches found",
-            "no package matched",
-            "no packages to list",
-            "matched no packages",
-            "no matching packages",
-        )
-        if any(marker in detail for marker in missing_markers):
+        if any(marker in detail for marker in DNF5_MISSING_MARKERS):
             self.package_lookup_cache[package] = False
             return False
         if proc.returncode == 0 and not names:
@@ -1859,14 +1857,7 @@ class App:
             if proc.returncode != 0:
                 if "cache-only enabled but no cache" in detail:
                     return [], False, "Package search needs local DNF metadata. Run 'dnf5 makecache' first, or use exact-name entry."
-                missing_markers = (
-                    "no matches found",
-                    "no package matched",
-                    "no packages to list",
-                    "matched no packages",
-                    "no matching packages",
-                )
-                if any(marker in detail for marker in missing_markers):
+                if any(marker in detail for marker in DNF5_MISSING_MARKERS):
                     return [], False, None
                 return [], False, "Package search is unavailable right now. Use exact-name entry instead."
 
@@ -2826,6 +2817,9 @@ class App:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+        print(f"ublue-builder {VERSION}")
+        raise SystemExit(0)
     app = App()
     try:
         app.run_main()

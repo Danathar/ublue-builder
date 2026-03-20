@@ -24,6 +24,62 @@ from ublue_builder import (
 )
 
 
+class GumStub:
+    """Shared test double for Gum — override only what you need per test."""
+
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str]] = []
+        self.prompts: list[str] = []
+
+    def header(self, *_args, **_kwargs) -> None:
+        pass
+
+    def hint(self, message: str = "", *_args, **_kwargs) -> None:
+        self.messages.append(("hint", message))
+
+    def instruction(self, *_args, **_kwargs) -> None:
+        pass
+
+    def controls(self, *_parts: str) -> None:
+        pass
+
+    def success(self, message: str) -> None:
+        self.messages.append(("success", message))
+
+    def warn(self, message: str) -> None:
+        self.messages.append(("warn", message))
+
+    def error(self, message: str) -> None:
+        self.messages.append(("error", message))
+
+    def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
+        self.prompts.append(placeholder)
+
+    def style(self, *lines: str, **_kwargs) -> str:
+        return "\n".join(lines)
+
+    def content_width(self, reserve: int = 0, **_kwargs) -> int:
+        return 100 - reserve
+
+    def confirm(self, _prompt: str, default: bool = False) -> bool:
+        return default
+
+    def pager(self, _text: str) -> None:
+        pass
+
+    def table(self, *_args, **_kwargs) -> None:
+        pass
+
+    def table_widths(self, *_args, **_kwargs) -> str:
+        return "20,40"
+
+    def form_width(self, **_kwargs) -> int:
+        return 80
+
+    def spinner(self, _title: str, _command, *, cwd=None) -> None:
+        pass
+
+
 class BuilderTests(unittest.TestCase):
     def make_app(self) -> App:
         app = App()
@@ -132,35 +188,14 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         with patch.object(app, "repo_secret_exists", return_value=False):
             with patch("ublue_builder.command_exists", side_effect=lambda name: False if name == "cosign" else True):
-                with self.assertRaisesRegex(CommandError, "brew install cosign"):
+                with self.assertRaisesRegex(CommandError, "dnf5 install cosign"):
                     app.ensure_signing_ready("example", "test-image")
 
     def test_preflight_warns_when_cosign_is_missing(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def ensure_available(self) -> None:
-                pass
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def success(self, *_args, **_kwargs) -> None:
-                pass
-
-            def warn(self, message: str, *_args, **_kwargs) -> None:
-                self.messages.append(("warn", message))
-
-            def enter_to_continue(self, *_args, **_kwargs) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.ensure_available = lambda: None
+        app.gum = stub
 
         def fake_exists(name: str) -> bool:
             if name == "cosign":
@@ -176,21 +211,9 @@ class BuilderTests(unittest.TestCase):
 
     def test_preflight_requires_github_cli(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def ensure_available(self) -> None:
-                pass
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def success(self, *_args, **_kwargs) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.ensure_available = lambda: None
+        app.gum = stub
 
         def fake_exists(name: str) -> bool:
             return name == "git"
@@ -201,21 +224,9 @@ class BuilderTests(unittest.TestCase):
 
     def test_preflight_requires_github_login(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def ensure_available(self) -> None:
-                pass
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def success(self, *_args, **_kwargs) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.ensure_available = lambda: None
+        app.gum = stub
 
         def fake_exists(name: str) -> bool:
             return name in {"git", "gh"}
@@ -227,20 +238,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_add_packages_to_config_accepts_valid_tokens(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
         app.gum = GumStub()
         with patch.object(app, "lookup_host_package", side_effect=[True, True]):
             added = app.add_packages_to_config(["tmux", "ripgrep"], source_label="manual entry")
@@ -250,20 +247,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_add_packages_to_config_rejects_unsafe_tokens(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
         app.gum = GumStub()
         added = app.add_packages_to_config(["tmux", "bad;rm"], source_label="manual entry")
         self.assertFalse(added)
@@ -272,23 +255,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_add_packages_to_config_rejects_missing_manual_packages(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
         app.gum = GumStub()
         with patch.object(app, "lookup_host_package", return_value=False):
             added = app.add_packages_to_config(["nethock"], source_label="manual entry")
@@ -298,23 +264,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_add_packages_to_config_keeps_checked_manual_packages_only(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
         app.gum = GumStub()
         with patch.object(app, "lookup_host_package", side_effect=[True, False]):
             added = app.add_packages_to_config(["tmux", "nethock"], source_label="manual entry")
@@ -324,23 +273,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_add_packages_to_config_warns_when_manual_check_is_unavailable(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
         app.gum = GumStub()
         with patch.object(app, "lookup_host_package", return_value=None):
             added = app.add_packages_to_config(["tmux"], source_label="manual entry")
@@ -351,23 +283,6 @@ class BuilderTests(unittest.TestCase):
     def test_add_packages_to_config_keeps_missing_manual_packages_when_copr_is_configured(self) -> None:
         app = self.make_app()
         app.config.copr_repos = ["foo/bar"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def success(self, message: str) -> None:
-                self.messages.append(("success", message))
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def error(self, message: str) -> None:
-                self.messages.append(("error", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
         app.gum = GumStub()
         with patch.object(app, "lookup_host_package", return_value=False):
             added = app.add_packages_to_config(["nethock"], source_label="manual entry")
@@ -378,16 +293,17 @@ class BuilderTests(unittest.TestCase):
     def test_search_host_packages_parses_results_and_limits_output(self) -> None:
         app = self.make_app()
         seen_commands: list[list[str]] = []
+        stub = GumStub()
 
-        class GumStub:
-            def spinner_result(self, _title, _command, *, cwd=None):
-                seen_commands.append(list(_command))
-                output = "\n".join(
-                    [f"pkg{i}\tSummary {i}" for i in range(PACKAGE_SEARCH_LIMIT + 2)]
-                )
-                return subprocess.CompletedProcess(["dnf5", "repoquery"], 0, output, "")
+        def fake_spinner_result(_title, _command, *, cwd=None):
+            seen_commands.append(list(_command))
+            output = "\n".join(
+                [f"pkg{i}\tSummary {i}" for i in range(PACKAGE_SEARCH_LIMIT + 2)]
+            )
+            return subprocess.CompletedProcess(["dnf5", "repoquery"], 0, output, "")
 
-        app.gum = GumStub()
+        stub.spinner_result = fake_spinner_result
+        app.gum = stub
         with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
             results, truncated, message = app.search_host_packages("pkg")
 
@@ -399,17 +315,14 @@ class BuilderTests(unittest.TestCase):
 
     def test_search_host_packages_reports_missing_cache(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def spinner_result(self, _title, _command, *, cwd=None):
-                return subprocess.CompletedProcess(
-                    ["dnf5", "repoquery"],
-                    1,
-                    "",
-                    'Cache-only enabled but no cache for repository "fedora"',
-                )
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.spinner_result = lambda _title, _command, *, cwd=None: subprocess.CompletedProcess(
+            ["dnf5", "repoquery"],
+            1,
+            "",
+            'Cache-only enabled but no cache for repository "fedora"',
+        )
+        app.gum = stub
         with patch("ublue_builder.command_exists", side_effect=lambda name: name == "dnf5"):
             results, truncated, message = app.search_host_packages("tmux")
 
@@ -420,36 +333,10 @@ class BuilderTests(unittest.TestCase):
     def test_search_packages_can_remove_previously_selected_match(self) -> None:
         app = self.make_app()
         app.config.packages = ["fish"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def header(self, _title: str) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def input(self, **_kwargs) -> str:
-                return "fish"
-
-            def form_width(self, **_kwargs) -> int:
-                return 72
-
-            def choose(self, _options, **_kwargs):
-                return []
-
-            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-                self.prompts.append(placeholder)
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.input = lambda **_kwargs: "fish"
+        stub.choose = lambda _options, **_kwargs: []
+        app.gum = stub
         with patch.object(app, "search_host_packages", return_value=([("fish", "Friendly interactive shell")], False, None)):
             app.search_packages()
 
@@ -459,27 +346,10 @@ class BuilderTests(unittest.TestCase):
     def test_select_packages_allows_remove_path_in_create_flow(self) -> None:
         app = self.make_app()
         app.config.packages = ["fish"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.choices = ["Remove selected packages", "Continue to review"]
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def choose(self, _options, **_kwargs):
-                return [self.choices.pop(0)]
-
-        app.gum = GumStub()
+        choices = ["Remove selected packages", "Continue to review"]
+        stub = GumStub()
+        stub.choose = lambda _options, **_kwargs: [choices.pop(0)]
+        app.gum = stub
         with patch.object(app, "choose_to_remove", return_value=[]) as remove_mock:
             app.select_packages()
 
@@ -490,27 +360,10 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.config.copr_repos = ["foo/bar"]
         app.config.services = ["sshd.service"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.choices = ["Remove COPR repositories", "Remove enabled services", "Continue to review"]
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def choose(self, _options, **_kwargs):
-                return [self.choices.pop(0)]
-
-        app.gum = GumStub()
+        choices = ["Remove COPR repositories", "Remove enabled services", "Continue to review"]
+        stub = GumStub()
+        stub.choose = lambda _options, **_kwargs: [choices.pop(0)]
+        app.gum = stub
         with patch.object(app, "choose_to_remove", side_effect=[[], []]) as remove_mock:
             app.select_packages()
 
@@ -521,66 +374,19 @@ class BuilderTests(unittest.TestCase):
 
     def test_select_packages_shows_requested_package_note(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.hints: list[str] = []
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, message: str) -> None:
-                self.hints.append(message)
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def choose(self, _options, **_kwargs):
-                return ["Continue to review"]
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.choose = lambda _options, **_kwargs: ["Continue to review"]
+        app.gum = stub
         app.select_packages()
 
-        self.assertIn(app.requested_packages_note(), app.gum.hints)
+        hints = [msg for level, msg in app.gum.messages if level == "hint"]
+        self.assertIn(app.requested_packages_note(), hints)
 
     def test_manual_packages_pauses_after_successful_add(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def header(self, _title: str) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def write(self, **_kwargs) -> str:
-                return "tmux"
-
-            def form_width(self, **_kwargs) -> int:
-                return 80
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def error(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-                self.prompts.append(placeholder)
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.write = lambda **_kwargs: "tmux"
+        app.gum = stub
         with patch.object(app, "lookup_host_package", return_value=True):
             app.manual_packages()
         self.assertEqual(app.config.packages, ["tmux"])
@@ -588,39 +394,9 @@ class BuilderTests(unittest.TestCase):
 
     def test_manual_packages_pauses_after_failed_add(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def header(self, _title: str) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def write(self, **_kwargs) -> str:
-                return "nethock"
-
-            def form_width(self, **_kwargs) -> int:
-                return 80
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def error(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-                self.prompts.append(placeholder)
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.write = lambda **_kwargs: "nethock"
+        app.gum = stub
         with patch.object(app, "lookup_host_package", return_value=False):
             app.manual_packages()
         self.assertEqual(app.config.packages, [])
@@ -629,24 +405,9 @@ class BuilderTests(unittest.TestCase):
     def test_select_common_services_replaces_curated_selection_only(self) -> None:
         app = self.make_app()
         app.config.services = ["custom.service", COMMON_SERVICES[0][1]]
-
-        class GumStub:
-            def header(self, _title: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def choose(self, _options, **_kwargs):
-                return [f"{COMMON_SERVICES[1][0]} ({COMMON_SERVICES[1][1]})"]
-
-            def success(self, _message: str) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.choose = lambda _options, **_kwargs: [f"{COMMON_SERVICES[1][0]} ({COMMON_SERVICES[1][1]})"]
+        app.gum = stub
         app.select_common_services()
         self.assertEqual(app.config.services, ["custom.service", COMMON_SERVICES[1][1]])
 
@@ -679,23 +440,6 @@ class BuilderTests(unittest.TestCase):
         app.github_available = True
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def header(self, _title: str) -> None:
-                pass
-
-            def spinner(self, _title, _command, *, cwd=None) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
         app.gum = GumStub()
 
         run_calls: list[list[str]] = []
@@ -719,29 +463,6 @@ class BuilderTests(unittest.TestCase):
         app.github_available = True
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def header(self, _title: str) -> None:
-                pass
-
-            def spinner(self, _title, _command, *, cwd=None) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def style(self, *lines, **_kwargs) -> str:
-                return "\n".join(lines)
-
-            def content_width(self, reserve: int = 0) -> int:
-                return 100 - reserve
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
         app.gum = GumStub()
 
         run_calls: list[list[str]] = []
@@ -768,32 +489,6 @@ class BuilderTests(unittest.TestCase):
         app.github_available = True
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def header(self, _title: str) -> None:
-                pass
-
-            def spinner(self, _title, _command, *, cwd=None) -> None:
-                pass
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
-            def style(self, *lines, **_kwargs) -> str:
-                return "\n".join(lines)
-
-            def content_width(self, reserve: int = 0) -> int:
-                return 100 - reserve
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
         app.gum = GumStub()
 
         def fake_run(args, **_kwargs):
@@ -815,26 +510,6 @@ class BuilderTests(unittest.TestCase):
         app.github_available = True
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.messages: list[tuple[str, str]] = []
-
-            def header(self, _title: str) -> None:
-                pass
-
-            def spinner(self, _title, _command, *, cwd=None) -> None:
-                pass
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
         app.gum = GumStub()
 
         def fake_run(args, **_kwargs):
@@ -860,30 +535,10 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.confirm_results = iter([False, True])
-
-            def confirm(self, _prompt: str, default: bool = False) -> bool:
-                return next(self.confirm_results)
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
-            def pager(self, _text: str) -> None:
-                pass
-
-        app.gum = GumStub()
+        confirm_results = iter([False, True])
+        stub = GumStub()
+        stub.confirm = lambda _prompt, default=False: next(confirm_results)
+        app.gum = stub
 
         run_calls: list[list[str]] = []
 
@@ -910,30 +565,10 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.confirm_results = iter([False, False])
-
-            def confirm(self, _prompt: str, default: bool = False) -> bool:
-                return next(self.confirm_results)
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
-            def pager(self, _text: str) -> None:
-                pass
-
-        app.gum = GumStub()
+        confirm_results = iter([False, False])
+        stub = GumStub()
+        stub.confirm = lambda _prompt, default=False: next(confirm_results)
+        app.gum = stub
 
         def fake_run(args, **_kwargs):
             if list(args) == ["git", "diff", "--stat"]:
@@ -954,33 +589,16 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.github_user = "example"
         app.config.github_user = "example"
+        confirm_prompts: list[str] = []
+        confirm_results = iter([False, True, False, False])
+        stub = GumStub()
 
-        class GumStub:
-            def __init__(self) -> None:
-                self.confirm_prompts: list[str] = []
-                self.confirm_results = iter([False, True, False, False])
-                self.messages: list[tuple[str, str]] = []
+        def fake_confirm(prompt, default=False):
+            confirm_prompts.append(prompt)
+            return next(confirm_results)
 
-            def confirm(self, prompt: str, default: bool = False) -> bool:
-                self.confirm_prompts.append(prompt)
-                return next(self.confirm_results)
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
-            def pager(self, _text: str) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub.confirm = fake_confirm
+        app.gum = stub
 
         diff_calls = {"count": 0}
         run_calls: list[list[str]] = []
@@ -1006,38 +624,17 @@ class BuilderTests(unittest.TestCase):
                         app.push_update("example", "test-image", repo_dir)
 
         self.assertTrue(any("final update changed" in message for level, message in app.gum.messages if level == "warn"))
-        self.assertIn("Push final changes to example/test-image?", app.gum.confirm_prompts)
+        self.assertIn("Push final changes to example/test-image?", confirm_prompts)
         self.assertTrue(all(call[:2] != ["git", "add"] for call in run_calls))
 
     def test_push_update_warns_about_hand_edited_managed_repos(self) -> None:
         app = self.make_app()
         app.github_user = "example"
         app.config.github_user = "example"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.confirm_results = iter([False, True])
-                self.messages: list[tuple[str, str]] = []
-
-            def confirm(self, _prompt: str, default: bool = False) -> bool:
-                return next(self.confirm_results)
-
-            def success(self, _message: str) -> None:
-                pass
-
-            def warn(self, message: str) -> None:
-                self.messages.append(("warn", message))
-
-            def hint(self, message: str) -> None:
-                self.messages.append(("hint", message))
-
-            def enter_to_continue(self, _placeholder: str = "Press Enter to continue...") -> None:
-                pass
-
-            def pager(self, _text: str) -> None:
-                pass
-
-        app.gum = GumStub()
+        confirm_results = iter([False, True])
+        stub = GumStub()
+        stub.confirm = lambda _prompt, default=False: next(confirm_results)
+        app.gum = stub
 
         def fake_run(args, **_kwargs):
             if list(args) == ["git", "diff", "--stat"]:
@@ -1084,31 +681,6 @@ class BuilderTests(unittest.TestCase):
         app.config.packages = ["old-package"]
         app.config.removed_packages = ["old-removal"]
 
-        class GumStub:
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def table(self, *_args, **_kwargs) -> None:
-                pass
-
-            def error(self, *_args, **_kwargs) -> None:
-                pass
-
-            def warn(self, *_args, **_kwargs) -> None:
-                pass
-
-            def confirm(self, *_args, **_kwargs) -> bool:
-                return True
-
-            def table_widths(self, *_args, **_kwargs) -> str:
-                return "20,40"
-
         status_payload = json.dumps(
             {
                 "deployments": [
@@ -1138,31 +710,6 @@ class BuilderTests(unittest.TestCase):
     def test_scan_os_preserves_exact_running_image_ref(self) -> None:
         app = self.make_app()
         app.github_user = "example"
-
-        class GumStub:
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def table(self, *_args, **_kwargs) -> None:
-                pass
-
-            def error(self, *_args, **_kwargs) -> None:
-                pass
-
-            def warn(self, *_args, **_kwargs) -> None:
-                pass
-
-            def confirm(self, *_args, **_kwargs) -> bool:
-                return True
-
-            def table_widths(self, *_args, **_kwargs) -> str:
-                return "20,40"
 
         status_payload = json.dumps(
             {
@@ -1225,55 +772,28 @@ class BuilderTests(unittest.TestCase):
     def test_search_packages_uses_value_delimiter_for_selected_results(self) -> None:
         app = self.make_app()
         app.config.packages = ["fish"]
+        choose_selected: list[str] = []
+        choose_options: list[str] = []
+        choose_label_delimiter: list[str | None] = [None]
+        stub = GumStub()
+        stub.input = lambda **_kwargs: "fish"
 
-        class GumStub:
-            def __init__(self) -> None:
-                self.choose_selected: list[str] | None = None
-                self.choose_options: list[str] | None = None
-                self.choose_label_delimiter: str | None = None
+        def fake_choose(options, **kwargs):
+            choose_options.extend(options)
+            choose_selected.extend(kwargs.get("selected", []))
+            choose_label_delimiter[0] = kwargs.get("label_delimiter")
+            return ["fish"]
 
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, *_args, **_kwargs) -> None:
-                pass
-
-            def controls(self, *_args, **_kwargs) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def menu_section(self, *_args, **_kwargs) -> None:
-                pass
-
-            def input(self, **_kwargs) -> str:
-                return "fish"
-
-            def form_width(self, **_kwargs) -> int:
-                return 72
-
-            def choose(self, options, **kwargs):
-                self.choose_options = list(options)
-                self.choose_selected = list(kwargs.get("selected", []))
-                self.choose_label_delimiter = kwargs.get("label_delimiter")
-                return ["fish"]
-
-            def enter_to_continue(self, *_args, **_kwargs) -> None:
-                pass
-
-            def warn(self, *_args, **_kwargs) -> None:
-                pass
-
-        app.gum = GumStub()
+        stub.choose = fake_choose
+        app.gum = stub
         with patch.object(app, "search_host_packages", return_value=([("fish", "Friendly, interactive shell, with extras")], False, None)):
             with patch.object(app, "add_packages_to_config", return_value=False):
                 app.search_packages()
 
-        self.assertEqual(app.gum.choose_selected, ["fish"])
-        self.assertEqual(app.gum.choose_label_delimiter, "\t")
-        self.assertTrue(app.gum.choose_options)
-        self.assertIn("\tfish", app.gum.choose_options[0])
+        self.assertEqual(choose_selected, ["fish"])
+        self.assertEqual(choose_label_delimiter[0], "\t")
+        self.assertTrue(choose_options)
+        self.assertIn("\tfish", choose_options[0])
 
     def test_render_containerfile_preserves_existing_text_when_no_from_line_is_patchable(self) -> None:
         app = self.make_app()
@@ -1302,38 +822,11 @@ class BuilderTests(unittest.TestCase):
         app.github_user = "example"
         manual_label = "Type a repository name manually"
         existing_label = f"{'existing-repo':<30} (no description)"
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.errors: list[str] = []
-                self.prompts: list[str] = []
-                self.filters = [manual_label, existing_label]
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def form_width(self, **_kwargs) -> int:
-                return 72
-
-            def filter(self, _options, **_kwargs) -> str:
-                return self.filters.pop(0)
-
-            def input(self, **_kwargs) -> str:
-                return "missing repo"
-
-            def error(self, message: str) -> None:
-                self.errors.append(message)
-
-            def enter_to_continue(self, placeholder: str = "Press Enter to continue...") -> None:
-                self.prompts.append(placeholder)
-
-        app.gum = GumStub()
+        filters = [manual_label, existing_label]
+        stub = GumStub()
+        stub.filter = lambda _options, **_kwargs: filters.pop(0)
+        stub.input = lambda **_kwargs: "missing repo"
+        app.gum = stub
         with patch.object(
             app,
             "gh_json_with_spinner",
@@ -1343,7 +836,8 @@ class BuilderTests(unittest.TestCase):
                 owner, repo = app.select_repo()
 
         self.assertEqual((owner, repo), ("example", "existing-repo"))
-        self.assertTrue(any("missing-repo" in message for message in app.gum.errors))
+        errors = [msg for level, msg in app.gum.messages if level == "error"]
+        self.assertTrue(any("missing-repo" in message for message in errors))
         self.assertEqual(app.gum.prompts, ["Press Enter to choose a different repository..."])
 
     def test_select_repo_allows_manual_entry_when_no_managed_repos_are_found(self) -> None:
@@ -1351,30 +845,10 @@ class BuilderTests(unittest.TestCase):
         app.github_available = True
         app.github_user = "example"
         manual_label = "Type a repository name manually"
-
-        class GumStub:
-            def warn(self, _message: str) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, _message: str) -> None:
-                pass
-
-            def controls(self, *_parts: str) -> None:
-                pass
-
-            def form_width(self, **_kwargs) -> int:
-                return 72
-
-            def filter(self, _options, **_kwargs) -> str:
-                return manual_label
-
-            def input(self, **_kwargs) -> str:
-                return "managed-repo"
-
-        app.gum = GumStub()
+        stub = GumStub()
+        stub.filter = lambda _options, **_kwargs: manual_label
+        stub.input = lambda **_kwargs: "managed-repo"
+        app.gum = stub
         with patch.object(app, "gh_json_with_spinner", return_value=[]):
             with patch.object(app, "gh_json", return_value={"name": "managed-repo"}):
                 with patch.object(app, "repo_has_state_file", return_value=True):
@@ -1385,24 +859,10 @@ class BuilderTests(unittest.TestCase):
     def test_update_menu_restores_base_image_when_cancelled(self) -> None:
         app = self.make_app()
         base_choice = app.format_task_choice("Base image", "Bazzite")
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.choices = [base_choice, "Cancel and go back"]
-
-            def header(self, *_args, **_kwargs) -> None:
-                pass
-
-            def instruction(self, _message: str) -> None:
-                pass
-
-            def hint(self, *_args, **_kwargs) -> None:
-                pass
-
-            def choose(self, _options, **_kwargs):
-                return [self.choices.pop(0)]
-
-        app.gum = GumStub()
+        choices = [base_choice, "Cancel and go back"]
+        stub = GumStub()
+        stub.choose = lambda _options, **_kwargs: [choices.pop(0)]
+        app.gum = stub
         with patch.object(app, "choose_base_image", side_effect=ScreenBack()):
             result = app.update_menu()
 
@@ -1416,14 +876,6 @@ class BuilderTests(unittest.TestCase):
 
     def test_clone_container_template_uses_bundled_snapshot(self) -> None:
         app = self.make_app()
-
-        class GumStub:
-            def spinner(self, title, command, *, cwd=None):
-                from ublue_builder import run
-
-                run(command, cwd=cwd)
-
-        app.gum = GumStub()
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "seeded"
             app.clone_container_template(target)
@@ -1473,42 +925,32 @@ class BuilderTests(unittest.TestCase):
         app = self.make_app()
         app.github_user = "example"
         app.config.packages = ["tmux", "ripgrep"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.paged: list[str] = []
-
-            def pager(self, text: str) -> None:
-                self.paged.append(text)
-
-        app.gum = GumStub()
+        paged: list[str] = []
+        stub = GumStub()
+        stub.pager = lambda text: paged.append(text)
+        app.gum = stub
         app.show_summary(step=4, total_steps=4, next_hint="This is the full build summary.")
 
-        self.assertEqual(len(app.gum.paged), 1)
-        self.assertIn("Review Build Configuration", app.gum.paged[0])
-        self.assertIn("Press q to close this screen", app.gum.paged[0])
-        self.assertIn("Repository", app.gum.paged[0])
-        self.assertIn("Step 4 of 4.", app.gum.paged[0])
+        self.assertEqual(len(paged), 1)
+        self.assertIn("Review Build Configuration", paged[0])
+        self.assertIn("Press q to close this screen", paged[0])
+        self.assertIn("Repository", paged[0])
+        self.assertIn("Step 4 of 4.", paged[0])
 
     def test_view_selections_uses_pager_for_read_only_view(self) -> None:
         app = self.make_app()
         app.config.packages = ["tmux"]
         app.config.services = ["sshd.service"]
-
-        class GumStub:
-            def __init__(self) -> None:
-                self.paged: list[str] = []
-
-            def pager(self, text: str) -> None:
-                self.paged.append(text)
-
-        app.gum = GumStub()
+        paged: list[str] = []
+        stub = GumStub()
+        stub.pager = lambda text: paged.append(text)
+        app.gum = stub
         app.view_selections()
 
-        self.assertEqual(len(app.gum.paged), 1)
-        self.assertIn("Current Selections", app.gum.paged[0])
-        self.assertIn("- tmux", app.gum.paged[0])
-        self.assertIn("- sshd.service", app.gum.paged[0])
+        self.assertEqual(len(paged), 1)
+        self.assertIn("Current Selections", paged[0])
+        self.assertIn("- tmux", paged[0])
+        self.assertIn("- sshd.service", paged[0])
 
     def test_patch_container_workflow_injects_cosign_key_into_existing_job_env(self) -> None:
         app = self.make_app()
