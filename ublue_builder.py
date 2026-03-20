@@ -1966,6 +1966,7 @@ class App:
             f"Image:      {image_uri}",
             "",
             "GitHub Actions is building your image now.",
+            "Scheduled rebuilds also run daily at about 10:05 UTC.",
             "After the first build finishes, switch with:",
             f"sudo bootc switch {image_uri}",
             f"Track the build: https://github.com/{owner}/{repo}/actions",

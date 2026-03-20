@@ -562,6 +562,7 @@ class BuilderTests(unittest.TestCase):
                             with patch.object(app, "write_project_files", return_value=None):
                                 self.assertTrue(app.do_build())
 
+        self.assertIn("Scheduled rebuilds also run daily at about 10:05 UTC.", output.getvalue())
         self.assertIn("sudo rpm-ostree reset", output.getvalue())
 
     def test_do_build_omits_reset_hint_for_normal_build(self) -> None:
@@ -585,6 +586,7 @@ class BuilderTests(unittest.TestCase):
                             with patch.object(app, "write_project_files", return_value=None):
                                 self.assertTrue(app.do_build())
 
+        self.assertIn("Scheduled rebuilds also run daily at about 10:05 UTC.", output.getvalue())
         self.assertNotIn("sudo rpm-ostree reset", output.getvalue())
 
     def test_do_build_explains_manual_cleanup_when_delete_scope_is_missing(self) -> None:
