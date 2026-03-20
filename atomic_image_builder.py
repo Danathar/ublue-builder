@@ -203,6 +203,24 @@ def ensure_trailing_newline(text: str) -> str:
     return text.rstrip("\n") + "\n"
 
 
+def normalize_container_image_reference(container_ref: str) -> str:
+    # rpm-ostree reports image origins with different prefixes depending on how
+    # the deployment was created. Normalize those into a plain image reference
+    # so scan results can be matched against our curated base-image list.
+    base = container_ref.strip()
+    if base.startswith("ostree-image-signed:docker://"):
+        return base[len("ostree-image-signed:docker://") :]
+    if base.startswith("ostree-unverified-registry:"):
+        return base[len("ostree-unverified-registry:") :]
+    if base.startswith("ostree-remote-image:") or base.startswith("ostree-remote-registry:"):
+        parts = base.split(":", 2)
+        if len(parts) == 3:
+            base = parts[2]
+    if base.startswith("docker://"):
+        return base[len("docker://") :]
+    return base
+
+
 def format_daily_rebuild_note(
     cron: str,
     *,
@@ -858,6 +876,10 @@ class App:
 
     def requested_packages_note(self) -> str:
         return "Selected packages are what this repo will attempt to add, even if some are already present in the chosen base image."
+
+    def published_image_ref(self, owner: str | None = None) -> str:
+        image_owner = (owner or self.config.github_user or self.github_user or "your-user").lower()
+        return f"ghcr.io/{image_owner}/{self.config.repo_name}:latest"
 
     def render_preflight_failure(
         self,
@@ -1650,18 +1672,7 @@ class App:
             or booted.get("origin")
             or ""
         )
-        # rpm-ostree reports image origins with different prefixes depending on
-        # how the deployment was created. We strip those to get a consistent
-        # image reference that can be matched against our supported base list.
-        base = container_ref
-        for prefix in (
-            "ostree-image-signed:docker://",
-            "ostree-unverified-registry:",
-            "ostree-remote-image:fedora:docker://",
-            "docker://",
-        ):
-            if base.startswith(prefix):
-                base = base[len(prefix):]
+        base = normalize_container_image_reference(container_ref)
         self.config.scanned_packages = unique(booted.get("requested-packages", []))
         self.config.scanned_removed = unique(booted.get("requested-base-removals", []))
         self.config.removed_packages = list(self.config.scanned_removed)
@@ -2077,7 +2088,7 @@ class App:
                         self.gum.hint("Delete the repo manually on GitHub before trying again.")
             raise
 
-        image_uri = f"ghcr.io/{owner}/{repo}:latest"
+        image_uri = self.published_image_ref(owner)
         summary_lines = [
             "Repository Created",
             "",
@@ -2899,7 +2910,7 @@ class App:
         # how to use the resulting image once GitHub finishes building it.
         base_name = self.config.base_image_name or self.config.base_image_uri
         owner = self.config.github_user or "your-user"
-        image_ref = f"ghcr.io/{owner}/{self.config.repo_name}:latest"
+        image_ref = self.published_image_ref(owner)
         packages = "\n".join(f"- `{pkg}`" for pkg in self.config.packages) or "- None selected yet."
         copr_repos = "\n".join(f"- `{repo}`" for repo in self.config.copr_repos) or "- None."
         services = "\n".join(f"- `{service}`" for service in self.config.services) or "- None."

@@ -28,6 +28,7 @@ from atomic_image_builder import (
     VERSION,
     config_from_state_payload,
     format_daily_rebuild_note,
+    normalize_container_image_reference,
 )
 
 
@@ -126,6 +127,12 @@ class BuilderTests(unittest.TestCase):
             local_tz=timezone.utc,
         )
         self.assertEqual(note, "Scheduled rebuilds also run daily at about 10:05 AM UTC.")
+
+    def test_normalize_container_image_reference_handles_remote_registry_prefix(self) -> None:
+        self.assertEqual(
+            normalize_container_image_reference("ostree-remote-registry:fedora:quay.io/fedora-ostree-desktops/kinoite:43"),
+            "quay.io/fedora-ostree-desktops/kinoite:43",
+        )
 
     def test_load_repo_config_rejects_repo_without_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -646,6 +653,31 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("Scheduled rebuilds also run daily at about", output.getvalue())
         self.assertNotIn("sudo rpm-ostree reset", output.getvalue())
 
+    def test_do_build_summary_uses_lowercase_ghcr_owner(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "ExampleUser"
+        app.config.github_user = "ExampleUser"
+        app.gum = GumStub()
+
+        def fake_run(args, **_kwargs):
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with patch("atomic_image_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready", return_value=True):
+                    with patch.object(app, "repo_default_branch", return_value="main"):
+                        with patch.object(app, "seed_project_template", return_value=None):
+                            with patch.object(app, "write_project_files", return_value=None):
+                                self.assertTrue(app.do_build())
+
+        rendered = output.getvalue()
+        self.assertIn("ghcr.io/exampleuser/test-image:latest", rendered)
+        self.assertNotIn("ghcr.io/ExampleUser/test-image:latest", rendered)
+
     def test_do_build_explains_manual_cleanup_when_delete_scope_is_missing(self) -> None:
         app = self.make_app()
         app.github_available = True
@@ -879,6 +911,34 @@ class BuilderTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(app.config.base_image_uri, "ghcr.io/ublue-os/bazzite:testing")
         self.assertEqual(app.config.base_image_name, "Bazzite (KDE)")
+
+    def test_scan_os_matches_fedora_atomic_remote_registry_origin(self) -> None:
+        app = self.make_app()
+        app.github_user = "example"
+
+        status_payload = json.dumps(
+            {
+                "deployments": [
+                    {
+                        "booted": True,
+                        "origin": "ostree-remote-registry:fedora:quay.io/fedora-ostree-desktops/kinoite:43",
+                        "requested-packages": [],
+                        "requested-base-removals": [],
+                    }
+                ]
+            }
+        )
+        app.gum = GumStub()
+        with patch("atomic_image_builder.command_exists", side_effect=lambda name: name == "rpm-ostree"):
+            with patch(
+                "atomic_image_builder.run",
+                return_value=subprocess.CompletedProcess(["rpm-ostree", "status", "--json", "--booted"], 0, status_payload, ""),
+            ):
+                result = app.scan_os()
+
+        self.assertTrue(result)
+        self.assertEqual(app.config.base_image_uri, "quay.io/fedora-ostree-desktops/kinoite:43")
+        self.assertEqual(app.config.base_image_name, "Fedora Kinoite")
 
     def test_update_existing_image_defers_signing_setup_until_push(self) -> None:
         app = self.make_app()
@@ -1153,6 +1213,12 @@ class BuilderTests(unittest.TestCase):
         self.assertIn(f"stop using `{TOOL_SLUG}` for this repo", readme)
         self.assertNotIn("## Local Build", readme)
         self.assertNotIn("just build", readme)
+
+    def test_generate_readme_uses_lowercase_published_image_owner(self) -> None:
+        app = self.make_app()
+        app.config.github_user = "ExampleUser"
+        readme = app.generate_readme()
+        self.assertIn("| Published Image | `ghcr.io/exampleuser/test-image:latest` |", readme)
 
     def test_write_project_files_updates_readme_when_config_changes(self) -> None:
         app = self.make_app()
