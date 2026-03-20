@@ -1694,7 +1694,10 @@ class App:
             if any(target.iterdir()):
                 raise CommandError(f"{target} already exists and is not empty.")
             target.rmdir()
-        shutil.copytree(source_dir, target, ignore=shutil.ignore_patterns(".template-source"))
+        try:
+            shutil.copytree(source_dir, target, ignore=shutil.ignore_patterns(".template-source"))
+        except (OSError, shutil.Error) as exc:
+            raise CommandError(f"Unable to copy bundled template snapshot for {repo}: {exc}") from exc
 
     def clone_container_template(self, target: Path) -> None:
         self.copy_template_snapshot(target, repo=CONTAINERFILE_TEMPLATE_REPO, source_dir=CONTAINERFILE_TEMPLATE_DIR)

@@ -882,6 +882,14 @@ class BuilderTests(unittest.TestCase):
             self.assertTrue((target / "Containerfile").is_file())
             self.assertFalse((target / ".template-source").exists())
 
+    def test_clone_container_template_wraps_copy_errors(self) -> None:
+        app = self.make_app()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "seeded"
+            with patch("ublue_builder.shutil.copytree", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(CommandError, "Unable to copy bundled template snapshot"):
+                    app.clone_container_template(target)
+
     def test_gum_input_raises_screen_back_when_interactive_command_aborts(self) -> None:
         gum = Gum()
         completed = subprocess.CompletedProcess(["gum", "input"], 1, "", "")
