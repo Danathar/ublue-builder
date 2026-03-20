@@ -73,9 +73,9 @@ You need:
 - `dnf5` for manual package-name checks
 - `rpm-ostree`
 
-The app checks for all of these at startup and exits if any are missing.
+The app checks the required helper CLI tools at startup and exits if they are missing.
 
-On supported Universal Blue desktop images, core host tools like `dnf5` and `rpm-ostree` should already be present. If helper CLI tools such as `gum`, `git`, `gh`, or `cosign` are missing, install them with Homebrew.
+On supported Universal Blue desktop images, core host tools like `dnf5` and `rpm-ostree` are expected to already be present. If helper CLI tools such as `gum`, `git`, `gh`, or `cosign` are missing, install them with Homebrew.
 
 You also need a GitHub account and should log in first:
 

@@ -71,8 +71,9 @@ ACTION_PINS: dict[str, tuple[str, str]] = {
     "redhat-actions/push-to-registry": ("5ed88d269cf581ea9ef6dd6806d01562096bee9c", "v2"),
     "sigstore/cosign-installer": ("faadad0cce49287aee09b3a48701e75088a2c6ad", "v4.0.0"),
 }
-PRECHECK_REQUIRED_TOOLS: tuple[str, ...] = ("gum", "git", "gh", "cosign", "dnf5", "rpm-ostree")
+PRECHECK_REQUIRED_TOOLS: tuple[str, ...] = ("gum", "git", "gh", "cosign")
 BREW_INSTALLABLE_TOOLS: tuple[str, ...] = ("gum", "git", "gh", "cosign")
+HOST_REQUIRED_TOOLS: tuple[str, ...] = ("dnf5", "rpm-ostree")
 
 
 @dataclass(frozen=True)
@@ -839,11 +840,12 @@ class App:
         self,
         *,
         missing_tools: Sequence[str],
+        missing_host_tools: Sequence[str] = (),
         github_login_missing: bool = False,
         github_account_error: bool = False,
     ) -> None:
         brew_tools = [name for name in PRECHECK_REQUIRED_TOOLS if name in missing_tools and name in BREW_INSTALLABLE_TOOLS]
-        host_tools = [name for name in PRECHECK_REQUIRED_TOOLS if name in missing_tools and name not in BREW_INSTALLABLE_TOOLS]
+        host_tools = list(missing_host_tools)
 
         if command_exists("gum"):
             self.gum.ensure_available()
@@ -865,6 +867,7 @@ class App:
             if host_tools:
                 self.menu_section(
                     "Host Requirements",
+                    f"Missing host tools: {', '.join(host_tools)}",
                     "This tool expects a supported rpm-ostree / bootc desktop image with dnf5 and rpm-ostree available.",
                 )
                 print()
@@ -888,6 +891,8 @@ class App:
             print()
             print("Run: gh auth status && gh auth login")
         if host_tools:
+            print()
+            print(f"Missing host tools: {', '.join(host_tools)}")
             print()
             print("This tool expects a supported rpm-ostree / bootc desktop image with dnf5 and rpm-ostree available.")
         print()
@@ -942,6 +947,7 @@ class App:
         # Preflight is intentionally blunt: it checks the tools this app depends
         # on before we let the user invest time in the wizard.
         missing_tools = [name for name in PRECHECK_REQUIRED_TOOLS if not command_exists(name)]
+        missing_host_tools = [name for name in HOST_REQUIRED_TOOLS if not command_exists(name)]
         github_login_missing = False
         github_account_error = False
 
@@ -959,9 +965,10 @@ class App:
         else:
             self.github_available = False
 
-        if missing_tools or github_login_missing or github_account_error:
+        if missing_tools or missing_host_tools or github_login_missing or github_account_error:
             self.render_preflight_failure(
                 missing_tools=missing_tools,
+                missing_host_tools=missing_host_tools,
                 github_login_missing=github_login_missing,
                 github_account_error=github_account_error,
             )
@@ -975,8 +982,6 @@ class App:
         self.gum.success("git found")
         self.gum.success(f"GitHub CLI authenticated as: {self.github_user}")
         self.gum.success("cosign found (new repos can configure signing automatically)")
-        self.gum.success("dnf5 found (manual package checks available)")
-        self.gum.success("rpm-ostree found (OS scan available)")
 
         print()
         self.gum.enter_to_continue("Press Enter to continue...")
