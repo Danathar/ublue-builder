@@ -1,8 +1,10 @@
+import io
 import json
 import subprocess
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -536,6 +538,54 @@ class BuilderTests(unittest.TestCase):
                             self.assertTrue(app.do_build())
 
         self.assertIn(("warn", MANAGED_REPO_WARNING), app.gum.messages)
+
+    def test_do_build_shows_reset_hint_after_scanned_import(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+        app.config.scanned_packages = ["tmux"]
+        app.config.packages = ["tmux"]
+        app.gum = GumStub()
+
+        def fake_run(args, **_kwargs):
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with patch("ublue_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready", return_value=True):
+                    with patch.object(app, "repo_default_branch", return_value="main"):
+                        with patch.object(app, "seed_project_template", return_value=None):
+                            with patch.object(app, "write_project_files", return_value=None):
+                                self.assertTrue(app.do_build())
+
+        self.assertIn("sudo rpm-ostree reset", output.getvalue())
+
+    def test_do_build_omits_reset_hint_for_normal_build(self) -> None:
+        app = self.make_app()
+        app.github_available = True
+        app.github_user = "example"
+        app.config.github_user = "example"
+        app.gum = GumStub()
+
+        def fake_run(args, **_kwargs):
+            if args[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            with patch("ublue_builder.run", side_effect=fake_run):
+                with patch.object(app, "ensure_signing_ready", return_value=True):
+                    with patch.object(app, "repo_default_branch", return_value="main"):
+                        with patch.object(app, "seed_project_template", return_value=None):
+                            with patch.object(app, "write_project_files", return_value=None):
+                                self.assertTrue(app.do_build())
+
+        self.assertNotIn("sudo rpm-ostree reset", output.getvalue())
 
     def test_do_build_explains_manual_cleanup_when_delete_scope_is_missing(self) -> None:
         app = self.make_app()

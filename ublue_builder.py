@@ -1616,6 +1616,11 @@ class App:
                 return image
         return None
 
+    def carried_scan_customizations(self) -> bool:
+        scanned_packages = set(self.config.scanned_packages)
+        scanned_removed = set(self.config.scanned_removed)
+        return any(pkg in scanned_packages for pkg in self.config.packages) or any(pkg in scanned_removed for pkg in self.config.removed_packages)
+
     def repo_secret_exists(self, owner: str, repo: str, secret_name: str) -> bool:
         # We probe for the secret before trying to generate or upload a new key.
         # That keeps updates idempotent and avoids silently rotating keys.
@@ -1965,6 +1970,15 @@ class App:
             f"sudo bootc switch {image_uri}",
             f"Track the build: https://github.com/{owner}/{repo}/actions",
         ]
+        if self.carried_scan_customizations():
+            summary_lines.extend(
+                [
+                    "",
+                    "This repo carries over package changes from your current system.",
+                    "Before switching, reset the current deployment with:",
+                    "sudo rpm-ostree reset",
+                ]
+            )
         print(
             self.gum.style(
                 *summary_lines,
